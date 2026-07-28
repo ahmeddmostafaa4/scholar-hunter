@@ -2,10 +2,200 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Scholar Hunter</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scholar Hunter — find scholarships you can actually apply to</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
+
   <body>
-    <h1>Scholar Hunter</h1>
-    <p>The full interface arrives in Phase 7.</p>
+    <!-- 1. Hero -->
+    <header class="hero">
+      <div class="hero__inner">
+        <h1 class="hero__title">Scholar Hunter</h1>
+        <p class="hero__tagline">Find scholarships you can actually apply to</p>
+        <ul class="chips" aria-label="How this works">
+          <li class="chip">🔎 Real sources only</li>
+          <li class="chip">🤝 Human-approved sends</li>
+          <li class="chip">📎 Course-aware matching</li>
+        </ul>
+      </div>
+    </header>
+
+    <main class="page">
+      <!-- 2. Profile form -->
+      <section class="card form-card" aria-labelledby="form-heading">
+        <h2 id="form-heading" class="card__title">Your profile</h2>
+        <p class="card__hint">
+          We check each opportunity's own page against these details, one
+          requirement at a time.
+        </p>
+
+        <form id="profile-form" novalidate>
+          <div class="grid">
+            <div class="field">
+              <label for="field_of_study">Field of study <span class="req">*</span></label>
+              <input
+                id="field_of_study"
+                name="field_of_study"
+                type="text"
+                placeholder="e.g. Computer Science"
+                autocomplete="off"
+                required
+              />
+            </div>
+
+            <div class="field">
+              <label for="degree_level">Current degree level <span class="req">*</span></label>
+              <select id="degree_level" name="degree_level" required>
+                <option value="">Choose…</option>
+                <option>Bachelor's</option>
+                <option>Master's</option>
+                <option>PhD</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="gpa">GPA <span class="optional">(optional)</span></label>
+              <input
+                id="gpa"
+                name="gpa"
+                type="text"
+                placeholder="e.g. 3.6/4.0 or 1.7 German scale"
+                autocomplete="off"
+              />
+            </div>
+
+            <div class="field">
+              <label for="nationality">Country / nationality <span class="req">*</span></label>
+              <input
+                id="nationality"
+                name="nationality"
+                type="text"
+                placeholder="e.g. Egypt"
+                autocomplete="off"
+                required
+              />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="interests">Interests or funding goal</label>
+            <input
+              id="interests"
+              name="interests"
+              type="text"
+              placeholder="e.g. study or conference funding in Germany, machine learning"
+              autocomplete="off"
+            />
+          </div>
+
+          <!-- Courses: paste or upload -->
+          <fieldset class="field courses">
+            <legend>
+              Undergraduate courses <span class="optional">(optional)</span>
+            </legend>
+            <p class="card__hint courses__hint">
+              Optional, but it improves accuracy: when a programme lists
+              prerequisites we match them against your courses by
+              <strong>content</strong>, not by title. Descriptions help most.
+            </p>
+
+            <div class="tabs" role="tablist" aria-label="How to provide courses">
+              <button
+                type="button"
+                class="tab is-active"
+                role="tab"
+                aria-selected="true"
+                aria-controls="panel-paste"
+                data-tab="paste"
+              >
+                Paste courses
+              </button>
+              <button
+                type="button"
+                class="tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="panel-upload"
+                data-tab="upload"
+              >
+                Upload file
+              </button>
+            </div>
+
+            <div id="panel-paste" class="tab-panel is-active" role="tabpanel">
+              <textarea
+                id="courses"
+                name="courses"
+                rows="4"
+                placeholder="One per line, e.g.&#10;Intro to AI: search, knowledge representation, machine learning&#10;Linear Algebra: vector spaces, matrices, eigenvalues"
+              ></textarea>
+            </div>
+
+            <div id="panel-upload" class="tab-panel" role="tabpanel">
+              <input
+                id="courses_file"
+                name="courses_file"
+                type="file"
+                accept=".txt,.csv,.pdf"
+                class="file-input"
+              />
+              <p class="card__hint">
+                A transcript or course list as <code>.txt</code>,
+                <code>.csv</code> or <code>.pdf</code> (max 5&nbsp;MB).
+              </p>
+            </div>
+          </fieldset>
+
+          <button type="submit" class="btn btn--primary btn--block" id="submit-btn">
+            <span class="btn__label">Find Scholarships</span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Error banner -->
+      <div
+        id="error-banner"
+        class="banner banner--error"
+        role="alert"
+        hidden
+      >
+        <span class="banner__icon" aria-hidden="true">!</span>
+        <div>
+          <strong class="banner__title">Something went wrong</strong>
+          <p class="banner__text" id="error-text"></p>
+        </div>
+      </div>
+
+      <!-- 3. Results -->
+      <section id="results-area" aria-live="polite">
+        <div id="loading" class="loading" hidden>
+          <div class="spinner" aria-hidden="true"></div>
+          <p class="loading__text">Searching trusted sources…</p>
+          <p class="loading__sub">
+            Reading each opportunity's page and checking it against your profile.
+            This usually takes under a minute.
+          </p>
+        </div>
+
+        <div id="results-summary" class="results-summary" hidden></div>
+        <div id="results" class="results"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        The agent only reports real results it finds and never sends anything
+        without your click.
+      </p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
   </body>
 </html>

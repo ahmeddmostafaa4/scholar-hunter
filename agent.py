@@ -1191,6 +1191,19 @@ REQUIREMENT_LABELS = {
 }
 
 
+def _label_key(label: str) -> str:
+    """Normalise a requirement label so equivalent wordings collapse together.
+
+    The model writes "Language Requirement" where our fallback label is
+    "Language"; comparing the raw strings let both through and the card showed
+    the same requirement twice.
+    """
+    key = re.sub(r"[^a-z]", "", str(label).lower())
+    for filler in ("requirement", "minimum", "eligible", "required"):
+        key = key.replace(filler, "")
+    return key or "requirement"
+
+
 def missing_profile_fields(profile: dict) -> list[str]:
     """Key fields the student has not filled in — the agent must ask before searching."""
     return [
@@ -1254,7 +1267,7 @@ def _assess_one(result: dict, profile: dict, courses: list) -> dict | None:
     seen = set()
     for row in eligibility.get("breakdown", []):
         label = str(row.get("requirement", "")).strip() or "Requirement"
-        seen.add(label.lower())
+        seen.add(_label_key(label))
         rows.append(
             {
                 "label": label,
@@ -1269,7 +1282,7 @@ def _assess_one(result: dict, profile: dict, courses: list) -> dict | None:
         value = requirements.get(key, NOT_STATED)
         if isinstance(value, list):
             value = ", ".join(str(v) for v in value) if value else NOT_STATED
-        if label.lower() in seen or str(value).strip().lower() in {NOT_STATED, "", "none"}:
+        if _label_key(label) in seen or str(value).strip().lower() in {NOT_STATED, "", "none"}:
             continue
         rows.append(
             {

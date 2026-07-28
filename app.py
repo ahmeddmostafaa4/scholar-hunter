@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import csv
 import io
-import json
+import os
 
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
@@ -244,14 +244,52 @@ def server_error(_error):
     return fail("Something went wrong on the server.", 500)
 
 
+DEFAULT_PORT = 5000
+FALLBACK_PORT = 5050
+
+
+def choose_port() -> tuple[int, str]:
+    """Pick a port that the browser will actually reach.
+
+    On macOS, AirPlay Receiver (ControlCenter) listens on *:5000. Flask still
+    binds 127.0.0.1:5000 happily, so the server looks fine in the terminal — but
+    http://localhost:5000 resolves to AirPlay first and answers 403 Forbidden.
+    Rather than let that look like a broken app, detect the clash and move.
+
+    Set PORT to override.
+    """
+    import socket
+
+    override = (os.environ.get("PORT") or "").strip()
+    if override.isdigit():
+        return int(override), ""
+
+    with socket.socket() as probe:
+        probe.settimeout(0.4)
+        occupied = probe.connect_ex(("localhost", DEFAULT_PORT)) == 0
+
+    if occupied:
+        return FALLBACK_PORT, (
+            f"  Note: something else already answers on port {DEFAULT_PORT}\n"
+            "        (on macOS this is usually AirPlay Receiver — System Settings\n"
+            "        > General > AirDrop & Handoff > AirPlay Receiver).\n"
+            f"        Using port {FALLBACK_PORT} instead."
+        )
+    return DEFAULT_PORT, ""
+
+
 if __name__ == "__main__":
+    port, note = choose_port()
+
     print("\n" + "=" * 62)
     print("  Scholar Hunter — find scholarships you can actually apply to")
     print("=" * 62)
     agent.print_banner()
     print("=" * 62)
-    print("  Open http://localhost:5000 in your browser")
+    if note:
+        print(note)
+    print(f"  Open http://localhost:{port} in your browser")
     print("  (local dev server — nothing is deployed anywhere)")
     print("=" * 62 + "\n")
 
-    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)
+    app.run(host="127.0.0.1", port=port, debug=True, use_reloader=False)

@@ -23,3 +23,8 @@ lxml>=5.0
 
 # Tests
 pytest>=8.0
+
+# Optional, for the Phase 7 browser tests only. Those tests skip themselves if
+# it is absent, so the app runs fine without it:
+#   pip install playwright && playwright install chromium
+# playwright>=1.40

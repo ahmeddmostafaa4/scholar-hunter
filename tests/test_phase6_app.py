@@ -422,6 +422,41 @@ def test_eligible_ranks_above_unclear(monkeypatch):
     assert [i["verdict"] for i in outcome["results"]] == ["eligible", "unclear"]
 
 
+def test_requirement_rows_are_not_duplicated(monkeypatch):
+    """Regression: the model labelled a row "Language Requirement" while the
+    fallback label was "Language", so the card listed the same requirement twice."""
+    monkeypatch.setattr(
+        agent, "search_opportunities",
+        lambda q, **kw: {"ok": True, "query": q, "count": 1, "results": [
+            {"title": "x", "url": "https://daad.de/real", "snippet": "", "trusted": True}]},
+    )
+    monkeypatch.setattr(
+        agent, "extract_requirements_from",
+        lambda url, **kw: {**REAL, "requirements": {
+            **REAL["requirements"], "language_requirement": "at least B1 German"}},
+    )
+    monkeypatch.setattr(
+        agent, "check_eligibility_for",
+        lambda reqs, prof: {"ok": True, "verdict": "unclear", "reason": "", "fit": "",
+                            "deadline_status": "open",
+                            "breakdown": [{"requirement": "Language Requirement",
+                                           "required": "at least B1 German",
+                                           "student": "not provided",
+                                           "status": "not_stated", "note": ""}]},
+    )
+    monkeypatch.setattr(agent, "match_courses_for", lambda s, r: dict(agent.NOT_ASSESSED))
+
+    item = agent.run_shortlist(VALID_PROFILE)["results"][0]
+    keys = [agent._label_key(row["label"]) for row in item["requirements"]]
+    assert len(keys) == len(set(keys)), item["requirements"]
+
+
+def test_label_key_collapses_wordings_but_keeps_distinct_ones():
+    assert agent._label_key("Language Requirement") == agent._label_key("Language")
+    assert agent._label_key("Degree Level") == agent._label_key("Degree level")
+    assert agent._label_key("Minimum GPA") != agent._label_key("Degree Level")
+
+
 def test_query_targets_the_next_degree_level():
     """A Bachelor's holder wants Master's funding, not more Bachelor's funding."""
     query = agent.build_query({"degree_level": "Bachelor's", "field_of_study": "Physics",
