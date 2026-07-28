@@ -8,8 +8,13 @@ Also runnable on its own for a quick check without the browser:
 
 from __future__ import annotations
 
+import json
 import os
+import re
+from datetime import date as _date
 
+import requests
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -246,6 +251,515 @@ def search_scholarships(query: str) -> str:
         tag = " [trusted portal]" if r["trusted"] else ""
         lines.append(f"\n{i}. {r['title']}{tag}\n   URL: {r['url']}\n   {r['snippet'][:600]}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Shared helper: ask Claude for JSON and get a dict back
+# ---------------------------------------------------------------------------
+
+# The requirement fields we try to pull from every opportunity page. Anything we
+# cannot find stays "not stated" — the agent must flag gaps, not fill them.
+REQUIREMENT_FIELDS = [
+    "minimum_gpa",
+    "degree_level",
+    "eligible_nationalities",
+    "language_requirement",
+    "field_of_study",
+    "deadline",
+    "funding_scope",
+    "required_courses",
+]
+
+# Only these are *criteria the student is judged against*. `deadline` is checked
+# separately (has it passed?) and `funding_scope` is descriptive — scoring either
+# against the student produces meaningless "not stated" rows and would drag every
+# verdict down to unclear.
+ELIGIBILITY_FIELDS = [
+    "minimum_gpa",
+    "degree_level",
+    "eligible_nationalities",
+    "language_requirement",
+    "field_of_study",
+    "required_courses",
+]
+
+NOT_STATED = "not stated"
+
+
+def _ask_json(prompt: str, *, fallback: dict) -> dict:
+    """Ask Claude for a JSON object and parse it. Returns `fallback` on failure.
+
+    The model occasionally wraps JSON in prose or a code fence, so we take the
+    outermost {...} rather than trusting the whole string to parse.
+    """
+    try:
+        raw = build_llm().invoke(prompt).content
+    except MissingKeyError as exc:
+        return {**fallback, "error": str(exc)}
+    except Exception as exc:
+        return {**fallback, "error": f"Model call failed: {exc}"}
+
+    if isinstance(raw, list):  # content can arrive as a list of blocks
+        raw = "".join(part.get("text", "") for part in raw if isinstance(part, dict))
+
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        return {**fallback, "error": "Model did not return JSON."}
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError as exc:
+        return {**fallback, "error": f"Could not parse model JSON: {exc}"}
+    return parsed if isinstance(parsed, dict) else {**fallback, "error": "Expected a JSON object."}
+
+
+# ---------------------------------------------------------------------------
+# Tool 2: requirement extraction
+# ---------------------------------------------------------------------------
+
+
+def fetch_page_text(url: str, max_chars: int = 12000) -> dict:
+    """Download an opportunity page and return its visible text.
+
+    Kept separate from extraction so a fetch failure is distinguishable from an
+    extraction failure — "the page would not load" and "the page did not say" are
+    different answers and the student deserves the honest one.
+    """
+    try:
+        response = requests.get(
+            url,
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; ScholarHunter/1.0)"},
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        return {"ok": False, "error": f"Could not fetch {url}: {exc}", "text": ""}
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    for noise in soup(["script", "style", "nav", "footer", "header", "form", "noscript"]):
+        noise.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", soup.get_text("\n", strip=True))
+    return {"ok": True, "text": text[:max_chars], "truncated": len(text) > max_chars}
+
+
+def extract_requirements_from(source: str, page_text: str = "") -> dict:
+    """Pull structured requirements out of an opportunity page or snippet.
+
+    `source` is a URL (which we fetch) or raw text. Fields that the page does not
+    state come back as "not stated" rather than being guessed.
+    """
+    source = (source or "").strip()
+    if not source and not page_text:
+        return {"ok": False, "error": "No URL or text supplied."}
+
+    url = source if source.lower().startswith("http") else ""
+    text = page_text
+    fetch_note = ""
+
+    if url and not text:
+        fetched = fetch_page_text(url)
+        if fetched["ok"]:
+            text = fetched["text"]
+        else:
+            fetch_note = fetched["error"]
+    if not text:
+        text = source if not url else ""
+
+    if not text.strip():
+        # Nothing to read: report every field as unknown instead of inventing.
+        return {
+            "ok": True,
+            "url": url,
+            "requirements": {f: NOT_STATED for f in REQUIREMENT_FIELDS},
+            "note": fetch_note or "No readable page content.",
+        }
+
+    blank = {f: NOT_STATED for f in REQUIREMENT_FIELDS}
+    prompt = f"""You are extracting the stated requirements of a scholarship, grant, master's programme or workshop.
+
+Return ONLY a JSON object with exactly these keys:
+  minimum_gpa, degree_level, eligible_nationalities, language_requirement,
+  field_of_study, deadline, funding_scope, required_courses, opportunity_name,
+  opportunity_type, institution
+
+Rules — these matter more than completeness:
+- Use ONLY what the text below actually states. Never infer, never guess, never
+  use outside knowledge about this programme.
+- If the text does not state a field, set it to exactly "{NOT_STATED}".
+- "required_courses" is a LIST of prerequisite/required course names the applicant
+  must already have studied. Use [] if the text names none.
+- "opportunity_type" must be one of: "scholarship", "master's programme",
+  "workshop", "grant", or "{NOT_STATED}".
+- "deadline" should be the application deadline as written (e.g. "15 January 2026").
+- "funding_scope" is what the money covers (e.g. "full tuition + 992 EUR/month stipend").
+
+TEXT:
+\"\"\"
+{text[:10000]}
+\"\"\"
+"""
+    parsed = _ask_json(prompt, fallback={"requirements": blank})
+
+    requirements = {f: parsed.get(f, NOT_STATED) or NOT_STATED for f in REQUIREMENT_FIELDS}
+    if isinstance(requirements["required_courses"], str):
+        # Normalise a stringified list into a real list.
+        value = requirements["required_courses"]
+        requirements["required_courses"] = [] if value == NOT_STATED else [value]
+
+    return {
+        "ok": True,
+        "url": url,
+        "name": parsed.get("opportunity_name", NOT_STATED),
+        "type": parsed.get("opportunity_type", NOT_STATED),
+        "institution": parsed.get("institution", NOT_STATED),
+        "requirements": requirements,
+        "note": parsed.get("error", fetch_note),
+    }
+
+
+class ExtractInput(BaseModel):
+    scholarship_url_or_text: str = Field(
+        description="The opportunity's page URL (preferred — it will be fetched), "
+        "or the raw text/snippet describing it."
+    )
+
+
+@tool("extract_requirements", args_schema=ExtractInput)
+def extract_requirements(scholarship_url_or_text: str) -> str:
+    """Read an opportunity's own page and extract its actual stated requirements.
+
+    Returns minimum GPA, required degree level, eligible nationalities, language
+    requirement, field of study, deadline, funding scope, and any required or
+    prerequisite courses. Anything the page does not state comes back as
+    "not stated" — never assume a requirement that is not written down.
+    """
+    outcome = extract_requirements_from(scholarship_url_or_text)
+    if not outcome.get("ok"):
+        return f"EXTRACTION FAILED: {outcome.get('error')}"
+    return json.dumps(outcome, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 3: eligibility check
+# ---------------------------------------------------------------------------
+
+VERDICTS = {"eligible", "not_eligible", "unclear"}
+
+
+def _as_dict(value, what: str) -> dict:
+    """Accept either a dict or a JSON string — the agent passes both."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {what: value}
+        except json.JSONDecodeError:
+            return {what: value}
+    return {}
+
+
+def check_eligibility_for(requirements, student_profile) -> dict:
+    """Compare extracted requirements against the profile, requirement by requirement.
+
+    Returns an overall verdict plus a per-requirement breakdown. "not stated" is a
+    first-class outcome: an unstated requirement can never make a student eligible,
+    it makes the verdict unclear.
+    """
+    requirements = _as_dict(requirements, "requirements")
+    profile = _as_dict(student_profile, "profile")
+
+    if not requirements:
+        return {"ok": False, "error": "No requirements supplied to check against."}
+    if not profile:
+        return {"ok": False, "error": "No student profile supplied."}
+
+    # The page may hand us the whole extraction envelope; unwrap it.
+    if "requirements" in requirements and isinstance(requirements["requirements"], dict):
+        requirements = requirements["requirements"]
+
+    # Score only genuine criteria. The deadline is judged on expiry and the funding
+    # scope is descriptive, so neither belongs in the met/not-met breakdown.
+    criteria = {f: requirements.get(f, NOT_STATED) for f in ELIGIBILITY_FIELDS}
+    deadline = requirements.get("deadline", NOT_STATED)
+    today = _date.today().isoformat()
+
+    prompt = f"""You are checking one student against one opportunity's stated eligibility criteria.
+
+TODAY'S DATE: {today}
+
+STUDENT PROFILE:
+{json.dumps(profile, indent=2, ensure_ascii=False)}
+
+OPPORTUNITY ELIGIBILITY CRITERIA (extracted from its own page):
+{json.dumps(criteria, indent=2, ensure_ascii=False)}
+
+APPLICATION DEADLINE (as written on the page): {deadline}
+
+Return ONLY a JSON object:
+{{
+  "verdict": "eligible" | "not_eligible" | "unclear",
+  "reason": "<one sentence explaining the verdict>",
+  "deadline_status": "open" | "expired" | "not stated",
+  "breakdown": [
+    {{"requirement": "<e.g. Minimum GPA>",
+      "required": "<what the opportunity asks, verbatim>",
+      "student": "<the student's corresponding value, or 'not provided'>",
+      "status": "met" | "not_met" | "not_stated",
+      "note": "<short explanation>"}}
+  ]
+}}
+
+Rules — follow these exactly:
+- Judge ONLY against the criteria above. Do not import outside knowledge about
+  this programme.
+- Include one breakdown entry per criterion, EXCEPT: skip any criterion whose
+  required value is "not stated" AND which the student also has no value for —
+  that row carries no information.
+- If the criterion is stated but the student did not supply the matching detail
+  (e.g. an IELTS score), status is "not_stated", not "met" and not "not_met".
+- "degree_level" means THE DEGREE THE APPLICANT MUST ALREADY HOLD. Do not confuse
+  it with the level of study being funded. A programme described as "graduate
+  funding" or "for graduate students" is a MASTER'S-LEVEL PROGRAMME — a student
+  holding a Bachelor's is eligible to apply for it. Only mark degree_level
+  "not_met" when the page explicitly requires an already-completed degree the
+  student does not hold (e.g. "applicants must already hold a Master's degree"
+  and the student holds only a Bachelor's).
+- "deadline_status": "expired" only if the deadline is clearly before today's date
+  ({today}); "open" if it is on or after today; "not stated" if absent or the year
+  is missing.
+- Verdict "not_eligible" if ANY criterion is clearly "not_met", or the deadline
+  has expired.
+- Verdict "eligible" ONLY if the page states real criteria AND every one of them
+  is "met" AND the deadline is not expired.
+- If the page states NO usable criteria at all, the verdict is "unclear", never
+  "eligible". Silence is not permission — a page that says nothing cannot confirm
+  that this student qualifies.
+- Otherwise "unclear". Never upgrade "unclear" to "eligible" to be encouraging —
+  overselling a match is a failure; saying "we could not confirm X" is a success.
+"""
+    parsed = _ask_json(prompt, fallback={"verdict": "unclear", "breakdown": []})
+
+    verdict = str(parsed.get("verdict", "unclear")).strip().lower()
+    if verdict not in VERDICTS:
+        verdict = "unclear"
+
+    breakdown = [b for b in parsed.get("breakdown", []) if isinstance(b, dict)]
+    for row in breakdown:
+        if row.get("status") not in {"met", "not_met", "not_stated"}:
+            row["status"] = "not_stated"
+
+    deadline_status = str(parsed.get("deadline_status", NOT_STATED)).strip().lower()
+    if deadline_status not in {"open", "expired", NOT_STATED}:
+        deadline_status = NOT_STATED
+
+    # Defensive floor: an "eligible" claim cannot stand next to a failed row or an
+    # expired deadline. Cheap to enforce here, expensive to get wrong.
+    if verdict == "eligible" and (
+        any(r["status"] == "not_met" for r in breakdown) or deadline_status == "expired"
+    ):
+        verdict = "not_eligible"
+
+    # Silence is not permission. A page that states nothing checkable cannot make
+    # a student eligible, however tempting the vacuous "nothing was unmet" logic is.
+    stated = any(
+        str(criteria.get(f, NOT_STATED)).strip().lower() not in {NOT_STATED, "", "[]", "none"}
+        for f in ELIGIBILITY_FIELDS
+    )
+    confirmed = any(r["status"] == "met" for r in breakdown)
+    if verdict == "eligible" and not (stated and confirmed):
+        verdict = "unclear"
+
+    return {
+        "ok": True,
+        "verdict": verdict,
+        "reason": parsed.get("reason", ""),
+        "deadline_status": deadline_status,
+        "breakdown": breakdown,
+        "note": parsed.get("error", ""),
+    }
+
+
+class EligibilityInput(BaseModel):
+    requirements: str = Field(
+        description="The opportunity's extracted requirements, as a JSON object string "
+        "(the output of extract_requirements)."
+    )
+    student_profile: str = Field(
+        description="The student's profile as a JSON object string: field_of_study, "
+        "degree_level, gpa, nationality, interests, and optionally courses."
+    )
+
+
+@tool("check_eligibility", args_schema=EligibilityInput)
+def check_eligibility(requirements: str, student_profile: str) -> str:
+    """Compare an opportunity's extracted requirements to the student, one by one.
+
+    Returns an overall verdict (eligible / not_eligible / unclear) plus a
+    per-requirement breakdown marking each met, not met, or not stated, with a
+    short reason. Flags missing information instead of assuming the student
+    qualifies.
+    """
+    outcome = check_eligibility_for(requirements, student_profile)
+    if not outcome.get("ok"):
+        return f"ELIGIBILITY CHECK FAILED: {outcome.get('error')}"
+    return json.dumps(outcome, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 4: course matching (description-based, not title-based)
+# ---------------------------------------------------------------------------
+
+NOT_ASSESSED = {
+    "ok": True,
+    "assessed": False,
+    "summary": "not assessed",
+    "matches": [],
+}
+
+
+def _as_list(value) -> list:
+    """Accept a list, a JSON array string, or a newline/comma separated string."""
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if not isinstance(value, str) or not value.strip():
+        return []
+    text = value.strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(v).strip() for v in parsed if str(v).strip()]
+    except json.JSONDecodeError:
+        pass
+    separator = "\n" if "\n" in text else ","
+    return [part.strip() for part in text.split(separator) if part.strip()]
+
+
+def match_courses_for(student_courses, required_courses) -> dict:
+    """Match the student's courses to a programme's required courses by content.
+
+    Comparison is on description and subject matter, not title, so "Intro to AI"
+    and "Foundations of Machine Intelligence" match when they cover the same
+    ground. Returns "not assessed" cleanly when either side is empty.
+    """
+    student = _as_list(student_courses)
+    required = _as_list(required_courses)
+
+    if not student:
+        return {**NOT_ASSESSED, "reason": "The student did not provide their courses."}
+    if not required:
+        return {**NOT_ASSESSED, "reason": "The programme does not list required courses."}
+
+    # If the student gave bare names with no descriptions, matching is weaker and
+    # we must say so rather than quietly reporting a confident match.
+    has_descriptions = any(
+        len(course) > 60 or any(sep in course for sep in (":", " - ", " — "))
+        for course in student
+    )
+    description_hint = (
+        "Descriptions were provided."
+        if has_descriptions
+        else "Descriptions were NOT provided — you have only course names. Because you "
+        "are matching on names and topic alone, cap every confidence at 'medium' or 'low'."
+    )
+
+    prompt = f"""You are matching a student's completed undergraduate courses against a programme's required/prerequisite courses.
+
+STUDENT'S COMPLETED COURSES:
+{json.dumps(student, indent=2, ensure_ascii=False)}
+
+PROGRAMME'S REQUIRED COURSES:
+{json.dumps(required, indent=2, ensure_ascii=False)}
+
+Return ONLY a JSON object:
+{{
+  "matches": [
+    {{"required_course": "<the required course>",
+      "status": "matched" | "partially_matched" | "missing",
+      "student_course": "<the student course that satisfies it, or null>",
+      "confidence": "high" | "medium" | "low",
+      "note": "<why they do or do not correspond>"}}
+  ]
+}}
+
+Rules:
+- Match on COURSE CONTENT AND DESCRIPTION, not on the title. Equivalent courses
+  carry different names at different universities: "Intro to AI" and "Foundations
+  of Machine Intelligence" are the same course; match them.
+- "partially_matched" when the student's course covers some but not all of the
+  required material.
+- "missing" when nothing the student studied covers the requirement. Do not
+  stretch a loose thematic connection into a match.
+- One entry per required course, in the order given.
+- {description_hint}
+"""
+    parsed = _ask_json(prompt, fallback={"matches": []})
+
+    matches = []
+    for row in parsed.get("matches", []):
+        if not isinstance(row, dict):
+            continue
+        status = row.get("status")
+        if status not in {"matched", "partially_matched", "missing"}:
+            status = "missing"
+        confidence = row.get("confidence", "low")
+        if confidence not in {"high", "medium", "low"}:
+            confidence = "low"
+        if not has_descriptions and confidence == "high":
+            confidence = "medium"  # names only — never claim high confidence
+        matches.append(
+            {
+                "required_course": row.get("required_course", ""),
+                "status": status,
+                "student_course": row.get("student_course"),
+                "confidence": confidence,
+                "note": row.get("note", ""),
+            }
+        )
+
+    matched = sum(1 for m in matches if m["status"] == "matched")
+    partial = sum(1 for m in matches if m["status"] == "partially_matched")
+    total = len(matches)
+    summary = f"{matched} of {total} required courses matched"
+    if partial:
+        summary += f" ({partial} partial)"
+
+    return {
+        "ok": True,
+        "assessed": True,
+        "summary": summary,
+        "matched": matched,
+        "partial": partial,
+        "total": total,
+        "confidence_capped": not has_descriptions,
+        "matches": matches,
+        "note": parsed.get("error", ""),
+    }
+
+
+class CourseMatchInput(BaseModel):
+    student_courses: str = Field(
+        description="The student's completed undergraduate courses — a JSON array "
+        "string, or one course per line. Descriptions improve accuracy."
+    )
+    required_courses: str = Field(
+        description="The programme's required/prerequisite courses — a JSON array "
+        "string, or one course per line."
+    )
+
+
+@tool("match_courses", args_schema=CourseMatchInput)
+def match_courses(student_courses: str, required_courses: str) -> str:
+    """Match the student's undergraduate courses to a programme's required courses.
+
+    Compares course descriptions and content rather than titles, so equivalent
+    courses with different names across universities still count. Returns, per
+    required course: matched / partially matched / missing, which student course
+    satisfies it, and a confidence level (lower when only names were given).
+    Returns "not assessed" if the student gave no courses or the programme lists
+    none.
+    """
+    outcome = match_courses_for(student_courses, required_courses)
+    return json.dumps(outcome, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

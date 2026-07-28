@@ -47,7 +47,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 |---|---|---|---|
 | `search_scholarships` | query | titles, snippets, URLs | Tavily |
 | `extract_requirements` | url or text | structured requirements (GPA, degree, nationality, language, field, deadline, funding, required courses; "not stated" when absent) | requests + LLM |
-| `check_eligibility` | requirements, profile | verdict + per-requirement met/not met/not stated | LLM reasoning |
+| `check_eligibility` | requirements, profile | verdict + per-criterion met/not met/not stated + `deadline_status` | LLM reasoning |
 | `match_courses` | student courses, required courses | per required course: matched/partial/missing + which course + confidence | LLM reasoning |
 | `draft_email` | to, subject, body | Gmail draft ID (never sends) | Gmail API (OAuth) |
 | `save_deadline` | name, date, url | appended entry | local `deadlines.json` |
@@ -58,7 +58,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 - [x] Phase 0 — skeleton, .gitignore, GitHub repo, first commit
 - [x] Phase 1 — LLM connection
 - [x] Phase 2 — web search tool
-- [ ] Phase 3 — extraction, eligibility, course matching
+- [x] Phase 3 — extraction, eligibility, course matching
 - [ ] Phase 4 — agent assembly
 - [ ] Phase 5 — Gmail draft + save_deadline
 - [ ] Phase 6 — Flask backend
@@ -68,6 +68,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 ## Test results
 
 - Phase 0: `pip install -r requirements.txt` succeeded in `.venv`; `agent`/`app` import; the reused `guc_portal`/`guc_cms` packages import from the repo root; a test asks **git itself** what it tracks and confirms no `.env`/`credentials.json`/`token.json`/venv is staged (`tests/test_phase0_skeleton.py`, 6 passed).
+- Phase 3: (a) fully-stated page + matching profile -> `eligible`, every row `met`, deadline `open`; (b) page requiring an already-held Master's vs a Bachelor's student -> `not_eligible` with the degree row identified as the failure; (c) page stating nothing checkable -> all fields `not stated` and verdict `unclear`. Course matching: differently-named-but-equivalent courses matched by description; a genuinely absent course reported `missing`; bare names (no descriptions) cap confidence below `high`; no courses on either side returns "not assessed" **without calling the model at all**. Two real bugs found and fixed while testing (see below). `tests/test_phase3_eligibility.py`, 17 passed; full suite 34 passed.
 - Phase 2: live Tavily queries ("Master's Data Science scholarship Germany 2026", "PhD funding for Egyptian students") returned real DAAD and Mastersportal URLs with trusted sources ranked first; a nonsense query returned cleanly instead of raising; an empty query is rejected without spending an API call; a missing key gives a clear `.env` message; the zero-result path explicitly tells the agent not to invent opportunities (`tests/test_phase2_search.py`, 7 passed).
 - Phase 1: live "Reply with exactly: OK" call to `claude-sonnet-4-6` returned OK; `python agent.py` prints the same. Missing/whitespace key raises a typed `MissingKeyError` whose message names the variable and points at `.env`, and `check_llm()` converts it to a result dict — no stack trace, no key echoed (`tests/test_phase1_llm.py`, 4 passed).
 
@@ -100,6 +101,8 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
   differ from the spec's `cms/`/`portal/` — they were already named this way).
   Their `.venv`s and `.env`s are git-ignored; the small `guc_cms`/`guc_portal`
   packages are committed with the repo.
+- **Eligibility scores criteria only.** `deadline` and `funding_scope` are deliberately excluded from the met/not-met breakdown (`ELIGIBILITY_FIELDS` vs `REQUIREMENT_FIELDS`): a deadline is not something a student "has", so scoring it produced meaningless `not_stated` rows that dragged every verdict to `unclear`. The deadline is judged separately as open/expired against today's date; funding scope is descriptive.
+- **Two guardrails are enforced in code, not just in the prompt**, because the model got both wrong in testing: (1) a "graduate funding" page describes the *level being funded*, not a degree the applicant must already hold — conflating them wrongly excluded exactly the students this tool exists to help; (2) when a page states no criteria, "nothing was unmet" is vacuously true and the model called it `eligible`. Silence is not permission, so an `eligible` verdict now requires at least one criterion both stated and confirmed.
 - Portal is slow/rate-limited → the GIU transcript tool is opt-in (button/CLI), not
   part of the default `/search` path.
 
