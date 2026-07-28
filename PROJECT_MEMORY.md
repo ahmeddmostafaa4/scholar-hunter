@@ -57,7 +57,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 
 - [x] Phase 0 — skeleton, .gitignore, GitHub repo, first commit
 - [x] Phase 1 — LLM connection
-- [ ] Phase 2 — web search tool
+- [x] Phase 2 — web search tool
 - [ ] Phase 3 — extraction, eligibility, course matching
 - [ ] Phase 4 — agent assembly
 - [ ] Phase 5 — Gmail draft + save_deadline
@@ -68,6 +68,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 ## Test results
 
 - Phase 0: `pip install -r requirements.txt` succeeded in `.venv`; `agent`/`app` import; the reused `guc_portal`/`guc_cms` packages import from the repo root; a test asks **git itself** what it tracks and confirms no `.env`/`credentials.json`/`token.json`/venv is staged (`tests/test_phase0_skeleton.py`, 6 passed).
+- Phase 2: live Tavily queries ("Master's Data Science scholarship Germany 2026", "PhD funding for Egyptian students") returned real DAAD and Mastersportal URLs with trusted sources ranked first; a nonsense query returned cleanly instead of raising; an empty query is rejected without spending an API call; a missing key gives a clear `.env` message; the zero-result path explicitly tells the agent not to invent opportunities (`tests/test_phase2_search.py`, 7 passed).
 - Phase 1: live "Reply with exactly: OK" call to `claude-sonnet-4-6` returned OK; `python agent.py` prints the same. Missing/whitespace key raises a typed `MissingKeyError` whose message names the variable and points at `.env`, and `check_llm()` converts it to a result dict — no stack trace, no key echoed (`tests/test_phase1_llm.py`, 4 passed).
 
 ## Setup / keys
@@ -106,4 +107,5 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 
 - Google Calendar integration still a TODO (deadline store is local JSON).
 - Portal transcript fetch is slow (~1 req/min rate limit) — used only on demand.
-- Tavily free tier caps requests; heavy testing can exhaust the quota.
+- Tavily free tier caps requests; heavy testing can exhaust the quota. Live search tests are kept few for this reason.
+- `TavilySearchResults` logs a deprecation warning on the LangChain 0.3 line (successor is the `langchain-tavily` package). Kept because the spec names it; swapping is a one-line change in `_tavily()`.
