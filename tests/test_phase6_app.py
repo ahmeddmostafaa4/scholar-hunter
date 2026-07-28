@@ -457,6 +457,77 @@ def test_label_key_collapses_wordings_but_keeps_distinct_ones():
     assert agent._label_key("Minimum GPA") != agent._label_key("Degree Level")
 
 
+def test_dedup_survives_extra_words_in_the_model_label():
+    """Regression: the model wrote "Eligible Nationalities / Groups" where the
+    fallback label was "Eligible nationalities", and exact matching let both
+    onto the card as duplicate rows."""
+    seen = {agent._label_key("Eligible Nationalities / Groups")}
+    assert agent._already_covered("Eligible nationalities", seen)
+    # ...but unrelated requirements must not be swallowed by the same rule.
+    assert not agent._already_covered("Language", seen)
+    assert not agent._already_covered("Minimum GPA", seen)
+
+
+def test_model_outage_is_reported_not_disguised_as_no_results(monkeypatch):
+    """Regression: when the API was unreachable (expired credits), every page
+    assessed to nothing and the user was told "no opportunities found — try
+    broadening your field", blaming their search for an outage."""
+    monkeypatch.setattr(
+        agent, "search_opportunities",
+        lambda q, **kw: {"ok": True, "query": q, "count": 1, "results": [
+            {"title": "x", "url": "https://daad.de/a", "snippet": "", "trusted": True}]},
+    )
+    monkeypatch.setattr(
+        agent, "extract_requirements_from",
+        lambda url, **kw: {"ok": True, "url": url, "requirements": {},
+                           "is_single_opportunity": False, "model_error": True,
+                           "note": "Your Anthropic credit balance is too low."},
+    )
+
+    outcome = agent.run_shortlist(VALID_PROFILE)
+    assert outcome["ok"] is False
+    assert "credit balance" in outcome["error"]
+    assert "broadening" not in outcome.get("message", "")
+
+
+def test_api_errors_are_explained_in_plain_language():
+    assert "credit balance" in agent._explain_model_error(
+        Exception("Error code: 400 - {'message': 'Your credit balance is too low'}")
+    )
+    assert "rate-limiting" in agent._explain_model_error(Exception("429 rate_limit_error"))
+    assert "ANTHROPIC_API_KEY" in agent._explain_model_error(Exception("401 authentication"))
+
+
+def test_a_real_page_still_works_when_only_one_candidate_errors(monkeypatch):
+    """A single flaky call must not be reported as a total outage."""
+    calls = {"n": 0}
+
+    def sometimes_broken(url, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"ok": True, "url": url, "requirements": {}, "model_error": True,
+                    "is_single_opportunity": False, "note": "transient"}
+        return REAL
+
+    monkeypatch.setattr(
+        agent, "search_opportunities",
+        lambda q, **kw: {"ok": True, "query": q, "count": 2, "results": [
+            {"title": "a", "url": "https://a/1", "snippet": "", "trusted": False},
+            {"title": "b", "url": "https://daad.de/real", "snippet": "", "trusted": True}]},
+    )
+    monkeypatch.setattr(agent, "extract_requirements_from", sometimes_broken)
+    monkeypatch.setattr(
+        agent, "check_eligibility_for",
+        lambda reqs, prof: {"ok": True, "verdict": "eligible", "reason": "", "fit": "",
+                            "deadline_status": "open", "breakdown": []},
+    )
+    monkeypatch.setattr(agent, "match_courses_for", lambda s, r: dict(agent.NOT_ASSESSED))
+
+    outcome = agent.run_shortlist(VALID_PROFILE)
+    assert outcome["ok"] is True
+    assert len(outcome["results"]) == 1
+
+
 def test_query_targets_the_next_degree_level():
     """A Bachelor's holder wants Master's funding, not more Bachelor's funding."""
     query = agent.build_query({"degree_level": "Bachelor's", "field_of_study": "Physics",

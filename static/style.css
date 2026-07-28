@@ -290,6 +290,15 @@ textarea { resize: vertical; min-height: 92px; font-size: 0.9375rem; }
 
 .btn:disabled { opacity: 0.75; cursor: default; }
 
+/* An action that cannot apply (e.g. no deadline on the page) reads as inert
+   rather than merely busy. */
+.btn--outline:disabled {
+  color: var(--ink-faint);
+  border-color: var(--line);
+  background: var(--grey-bg);
+  cursor: not-allowed;
+}
+
 .btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 /* Confirmed state after a card action */

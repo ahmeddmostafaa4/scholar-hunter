@@ -222,6 +222,27 @@ def test_save_deadline_shows_an_inline_confirmation(page):
     assert "Deadline saved" in button.inner_text()
 
 
+def test_save_deadline_is_disabled_when_the_page_states_none(page):
+    """A button that cannot work should say so before the click, not after."""
+    page.route("**/search", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body='{"ok": true, "results": [{"name": "No Deadline Programme",'
+             '"type": "scholarship", "institution": "X", "fit": "f",'
+             '"verdict": "unclear", "verdict_reason": "", "requirements": [],'
+             '"course_match": {"assessed": false, "summary": "not assessed"},'
+             '"deadline": "not stated", "deadline_status": "not stated",'
+             '"funding": "not stated", "url": "https://x.org/a",'
+             '"trusted_source": false}], "considered": 1}'))
+
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+
+    button = page.locator('[data-action="deadline"]').first
+    assert button.is_disabled()
+    assert "no deadline" in (button.get_attribute("title") or "").lower()
+
+
 def test_draft_email_without_gmail_explains_itself_on_the_card(page):
     """No popup, no silent failure — the message belongs on the card it concerns."""
     dialogs = []

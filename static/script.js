@@ -143,6 +143,9 @@
       ? `<span>${escapeHtml(item.institution)}</span>`
       : "";
     const type = isStated(item.type) ? escapeHtml(item.type) : "opportunity";
+    // Nothing to save when the page never stated one — say so on the button
+    // rather than letting the click fail.
+    const hasDeadline = isStated(item.deadline);
 
     const card = document.createElement("article");
     card.className = "result";
@@ -198,7 +201,8 @@
         <button type="button" class="btn btn--outline" data-action="draft">
           <span class="btn__label">Draft email</span>
         </button>
-        <button type="button" class="btn btn--outline" data-action="deadline">
+        <button type="button" class="btn btn--outline" data-action="deadline"
+          ${hasDeadline ? "" : 'disabled title="This page states no deadline, so there is nothing to save."'}>
           <span class="btn__label">Save deadline</span>
         </button>
       </div>`;
@@ -206,9 +210,13 @@
     card
       .querySelector('[data-action="draft"]')
       .addEventListener("click", (event) => onDraftEmail(event.currentTarget, item, card));
-    card
-      .querySelector('[data-action="deadline"]')
-      .addEventListener("click", (event) => onSaveDeadline(event.currentTarget, item, card));
+
+    const deadlineBtn = card.querySelector('[data-action="deadline"]');
+    if (hasDeadline) {
+      deadlineBtn.addEventListener("click", (event) =>
+        onSaveDeadline(event.currentTarget, item, card)
+      );
+    }
 
     return card;
   }

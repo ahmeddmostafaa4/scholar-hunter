@@ -76,6 +76,7 @@ Application deadline: 3 February 2019.
 # --- (a) clearly eligible ---------------------------------------------------
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_all_requirements_met_gives_eligible():
     extracted = agent.extract_requirements_from(FULLY_STATED_PAGE)
@@ -94,6 +95,7 @@ def test_all_requirements_met_gives_eligible():
 # --- (b) clearly ineligible, with the failing requirement named -------------
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_wrong_degree_level_is_caught_and_named():
     extracted = agent.extract_requirements_from(REQUIRES_MASTERS_PAGE)
@@ -108,6 +110,7 @@ def test_wrong_degree_level_is_caught_and_named():
 # --- (c) missing info -> not_stated + unclear, never a guess ----------------
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_silent_page_yields_not_stated_and_unclear():
     extracted = agent.extract_requirements_from(SILENT_PAGE)
@@ -182,6 +185,7 @@ def test_silence_is_never_treated_as_permission(monkeypatch):
     assert result["verdict"] == "unclear", result
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_expired_deadline_is_rejected():
     """The spec says expired options are discarded — so they must be detected."""
@@ -192,6 +196,7 @@ def test_expired_deadline_is_rejected():
     assert result["verdict"] == "not_eligible", result
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_graduate_level_programme_does_not_exclude_a_bachelors_holder():
     """Regression: 'funding for graduate study' is the level being funded, not a
@@ -263,6 +268,7 @@ def test_eligible_verdict_cannot_survive_a_failed_requirement(monkeypatch):
 # --- (d) different names, same description, must match ---------------------
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_differently_named_equivalent_courses_match():
     student = [
@@ -285,6 +291,7 @@ def test_differently_named_equivalent_courses_match():
 # --- (e) a genuinely absent course must be reported missing ----------------
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_genuinely_missing_course_is_reported_missing():
     student = [
@@ -300,6 +307,7 @@ def test_genuinely_missing_course_is_reported_missing():
     assert "0 of 1" in result["summary"]
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_names_without_descriptions_cap_confidence():
     """Bare names are a weaker signal, and the tool must say so."""

@@ -53,6 +53,7 @@ def test_system_prompt_is_dated_so_deadlines_can_be_judged():
     assert date.today().isoformat() in rendered
 
 
+@pytest.mark.live_llm
 @needs_llm
 def test_agent_builds_with_a_prompt_and_tools():
     executor = agent.build_agent()
@@ -100,6 +101,7 @@ def test_missing_key_is_reported_not_raised(monkeypatch):
     assert "ANTHROPIC_API_KEY" in result["error"]
 
 
+@pytest.mark.live_llm
 @needs_both
 def test_end_to_end_shortlist_cites_real_sources():
     """The headline test: a full profile in, a sourced shortlist out."""
@@ -124,6 +126,7 @@ def test_end_to_end_shortlist_cites_real_sources():
     assert any(word in lowered for word in ("eligib", "requirement"))
 
 
+@pytest.mark.live_llm
 @needs_both
 def test_agent_asks_for_missing_profile_fields_instead_of_searching():
     """A bare 'find me money' must trigger questions, not invented results."""

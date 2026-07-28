@@ -23,6 +23,7 @@ def test_model_name_is_a_module_constant():
     assert agent.MODEL_NAME == "claude-sonnet-4-6"
 
 
+@pytest.mark.live_llm
 @needs_key
 def test_live_call_returns_ok():
     result = agent.check_llm()

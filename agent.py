@@ -306,6 +306,21 @@ ELIGIBILITY_FIELDS = [
 NOT_STATED = "not stated"
 
 
+def _explain_model_error(exc: Exception) -> str:
+    """Turn a raw API exception into something a student can act on."""
+    text = str(exc)
+    if "credit balance is too low" in text:
+        return (
+            "Your Anthropic credit balance is too low to run a search. Top it up at "
+            "console.anthropic.com (Plans & Billing) and try again."
+        )
+    if "rate_limit" in text or "429" in text:
+        return "The Anthropic API is rate-limiting requests. Wait a moment and try again."
+    if "authentication" in text.lower() or "401" in text:
+        return "Your ANTHROPIC_API_KEY was rejected. Check the value in your .env file."
+    return f"The language model could not be reached: {text}"
+
+
 def _as_text(content) -> str:
     """Flatten a Claude response into a plain string.
 
@@ -335,9 +350,13 @@ def _ask_json(prompt: str, *, fallback: dict) -> dict:
     try:
         raw = _as_text(build_llm().invoke(prompt).content)
     except MissingKeyError as exc:
-        return {**fallback, "error": str(exc)}
+        # `model_error` marks "the model never answered" as distinct from "the
+        # model answered and the page said nothing". Without it, an outage or an
+        # empty credit balance degrades into an empty shortlist that blames the
+        # student's search terms.
+        return {**fallback, "error": str(exc), "model_error": True}
     except Exception as exc:
-        return {**fallback, "error": f"Model call failed: {exc}"}
+        return {**fallback, "error": _explain_model_error(exc), "model_error": True}
 
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
@@ -462,6 +481,7 @@ TEXT:
         "is_single_opportunity": parsed.get("is_single_opportunity") is True,
         "requirements": requirements,
         "note": parsed.get("error", fetch_note),
+        "model_error": parsed.get("model_error", False),
     }
 
 
@@ -1204,6 +1224,17 @@ def _label_key(label: str) -> str:
     return key or "requirement"
 
 
+def _already_covered(label: str, seen: set[str]) -> bool:
+    """True if the eligibility breakdown already has a row for this requirement.
+
+    Compares by containment, not equality: the model writes labels like
+    "Eligible Nationalities / Groups" where our fallback label is "Eligible
+    nationalities", and an exact match let both onto the card as duplicate rows.
+    """
+    key = _label_key(label)
+    return any(key in other or other in key for other in seen if other)
+
+
 def missing_profile_fields(profile: dict) -> list[str]:
     """Key fields the student has not filled in — the agent must ask before searching."""
     return [
@@ -1245,6 +1276,11 @@ def _assess_one(result: dict, profile: dict, courses: list) -> dict | None:
     extracted = extract_requirements_from(result["url"])
     requirements = extracted.get("requirements", {})
 
+    # The model never answered — say so upstream rather than reporting this page
+    # as "nothing found", which would blame the student's search for an outage.
+    if extracted.get("model_error"):
+        return {"_skipped": "model_error", "_error": extracted.get("note", "")}
+
     # A directory or "Top 10 scholarships" round-up is not something a student can
     # apply to, and its vague blanket criteria ("Computer Science", "Masters")
     # match almost anyone — which produced confidently wrong "eligible" cards.
@@ -1282,7 +1318,11 @@ def _assess_one(result: dict, profile: dict, courses: list) -> dict | None:
         value = requirements.get(key, NOT_STATED)
         if isinstance(value, list):
             value = ", ".join(str(v) for v in value) if value else NOT_STATED
-        if _label_key(label) in seen or str(value).strip().lower() in {NOT_STATED, "", "none"}:
+        if _already_covered(label, seen) or str(value).strip().lower() in {
+            NOT_STATED,
+            "",
+            "none",
+        }:
             continue
         rows.append(
             {
@@ -1376,6 +1416,17 @@ def run_shortlist(profile: dict, max_results: int = 5, candidates: int = 12) -> 
     items = [item for item in assessed if item and "_skipped" not in item]
     skipped_listings = sum(1 for a in assessed if a and a.get("_skipped") == "listing")
     skipped_ineligible = sum(1 for a in assessed if a and a.get("_skipped") == "ineligible")
+
+    # If nothing survived and the model was failing throughout, the honest answer
+    # is "the search could not run", not "we found nothing for your profile".
+    model_errors = [a for a in assessed if a and a.get("_skipped") == "model_error"]
+    if not items and model_errors:
+        return {
+            "ok": False,
+            "error": model_errors[0].get("_error")
+            or "The language model could not be reached, so nothing could be assessed.",
+            "results": [],
+        }
 
     # Rank: confirmed eligible first, then by how much of the course list matched,
     # then trusted sources ahead of the rest.
