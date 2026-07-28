@@ -110,8 +110,8 @@ def _fill_valid(page):
 
 
 def test_hero_and_form_render(page):
+    assert page.inner_text(".wordmark") == "Scholar Hunter"
     assert page.is_visible(".hero__title")
-    assert page.inner_text(".hero__title") == "Scholar Hunter"
     assert page.is_visible("#profile-form")
     assert page.locator(".chip").count() == 3
 
@@ -172,7 +172,8 @@ def test_eligibility_badge_uses_icon_and_label_not_colour_alone(page):
     page.wait_for_selector(".badge", timeout=15000)
 
     badge = page.locator(".badge").first
-    assert "Eligible" in badge.inner_text()
+    # The stamp is uppercased by CSS, so compare case-insensitively.
+    assert "eligible" in badge.inner_text().lower()
     assert "✓" in badge.inner_text()
     assert "badge--eligible" in badge.get_attribute("class")
 
@@ -184,8 +185,9 @@ def test_requirement_rows_show_per_requirement_status(page):
 
     rows = page.locator(".reqs li")
     assert rows.count() == 2
-    assert "met" in rows.nth(0).inner_text()
-    assert "not stated" in rows.nth(1).inner_text()
+    # Status stamps are uppercased by CSS, so compare case-insensitively.
+    assert "met" in rows.nth(0).inner_text().lower()
+    assert "not stated" in rows.nth(1).inner_text().lower()
 
 
 def test_course_match_summary_and_bar(page):

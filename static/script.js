@@ -5,7 +5,9 @@
 
   const form = document.getElementById("profile-form");
   const submitBtn = document.getElementById("submit-btn");
+  const idle = document.getElementById("idle");
   const loading = document.getElementById("loading");
+  const loadingText = document.getElementById("loading-text");
   const resultsEl = document.getElementById("results");
   const summaryEl = document.getElementById("results-summary");
   const errorBanner = document.getElementById("error-banner");
@@ -59,6 +61,29 @@
     return Math.round((parsed - Date.now()) / 86400000);
   }
 
+  // What the agent is doing, narrated while the student waits.
+  const LOADING_STEPS = [
+    "Searching trusted sources…",
+    "Opening each opportunity's own page…",
+    "Checking requirements one at a time…",
+    "Stamping what is met, not met, or not stated…",
+  ];
+  let loadingTimer = null;
+
+  function startLoadingNarration() {
+    let step = 0;
+    loadingText.textContent = LOADING_STEPS[0];
+    loadingTimer = setInterval(() => {
+      step = (step + 1) % LOADING_STEPS.length;
+      loadingText.textContent = LOADING_STEPS[step];
+    }, 3500);
+  }
+
+  function stopLoadingNarration() {
+    clearInterval(loadingTimer);
+    loadingTimer = null;
+  }
+
   // --- rendering ---------------------------------------------------------
 
   const VERDICT_TEXT = {
@@ -79,30 +104,29 @@
       return '<p class="card__hint" style="margin:0">This page states no checkable requirements.</p>';
     }
     const items = rows
-      .map(
-        (row) => `
+      .map((row) => {
+        const mark = STATUS_MARK[row.status] || "–";
+        const word = STATUS_WORD[row.status] || row.status;
+        return `
         <li>
-          <span class="reqs__mark reqs__mark--${escapeHtml(row.status)}" aria-hidden="true">${
-            STATUS_MARK[row.status] || "–"
-          }</span>
-          <span>
-            <span class="reqs__label">${escapeHtml(row.label)}:</span>
-            <span class="reqs__value">${escapeHtml(row.required)}</span>
-            <span class="reqs__status">— ${escapeHtml(
-              STATUS_WORD[row.status] || row.status
-            )}${row.note ? ". " + escapeHtml(row.note) : ""}</span>
-          </span>
-        </li>`
-      )
+          <div class="ledger__row">
+            <span class="ledger__key">${escapeHtml(row.label)}</span>
+            <span class="ledger__val">${escapeHtml(row.required)}</span>
+            <span class="ledger__leader" aria-hidden="true"></span>
+            <span class="stamp stamp--${escapeHtml(row.status)}">${mark} ${escapeHtml(word)}</span>
+          </div>
+          ${row.note ? `<p class="ledger__note">${escapeHtml(row.note)}</p>` : ""}
+        </li>`;
+      })
       .join("");
-    return `<ul class="reqs">${items}</ul>`;
+    return `<ul class="ledger reqs">${items}</ul>`;
   }
 
   function renderCourseMatch(match) {
     if (!match || !match.assessed) {
-      return `<p class="course-match" style="margin:0">Not assessed${
+      return `<p class="course-match">Not assessed${
         match && match.summary === "not assessed"
-          ? " — add your courses above, or this programme lists no prerequisites."
+          ? " — add your courses in the profile, or this programme lists no prerequisites."
           : "."
       }</p>`;
     }
@@ -111,7 +135,7 @@
       ? '<span class="course-match__note"> Confidence is capped: course names were given without descriptions.</span>'
       : "";
     return `
-      <p class="course-match" style="margin:0">
+      <p class="course-match">
         <strong>${escapeHtml(match.summary)}</strong>${note}
       </p>
       <div class="bar" role="img" aria-label="${escapeHtml(match.summary)}">
@@ -121,20 +145,20 @@
 
   function renderDeadline(item) {
     if (!isStated(item.deadline)) {
-      return "<span>Not stated</span>";
+      return '<span class="ledger__val">Not stated</span>';
     }
     const text = escapeHtml(item.deadline);
     const days = daysUntil(item.deadline);
 
     if (item.deadline_status === "expired" || (days !== null && days < 0)) {
-      return `<span class="deadline--expired">${text} — closed</span>`;
+      return `<span class="ledger__val">${text}</span>
+        <span class="deadline--expired">closed</span>`;
     }
     if (days !== null && days <= 30) {
-      return `<span class="deadline--soon">${text} — ${days} day${
-        days === 1 ? "" : "s"
-      } left</span>`;
+      return `<span class="ledger__val">${text}</span>
+        <span class="deadline--soon">${days} day${days === 1 ? "" : "s"} left</span>`;
     }
-    return `<span>${text}</span>`;
+    return `<span class="ledger__val">${text}</span>`;
   }
 
   function renderCard(item, index) {
@@ -183,12 +207,24 @@
 
       <div class="result__section">
         <span class="result__label">Deadline &amp; funding</span>
-        <div class="facts">
-          <div><strong>Deadline:</strong> ${renderDeadline(item)}</div>
-          <div><strong>Funding:</strong> ${
-            isStated(item.funding) ? escapeHtml(item.funding) : "Not stated"
-          }</div>
-        </div>
+        <ul class="ledger facts">
+          <li>
+            <div class="ledger__row">
+              <span class="ledger__key">Deadline</span>
+              <span class="ledger__leader" aria-hidden="true"></span>
+              ${renderDeadline(item)}
+            </div>
+          </li>
+          <li>
+            <div class="ledger__row">
+              <span class="ledger__key">Funding</span>
+              <span class="ledger__leader" aria-hidden="true"></span>
+              <span class="ledger__val">${
+                isStated(item.funding) ? escapeHtml(item.funding) : "Not stated"
+              }</span>
+            </div>
+          </li>
+        </ul>
       </div>
 
       <div class="result__section">
@@ -355,7 +391,9 @@
 
     resultsEl.innerHTML = "";
     summaryEl.hidden = true;
+    idle.hidden = true;
     loading.hidden = false;
+    startLoadingNarration();
     submitBtn.disabled = true;
     submitBtn.innerHTML =
       '<span class="btn__spinner" aria-hidden="true"></span>' +
@@ -379,9 +417,10 @@
         "Could not reach the server. Check that `python app.py` is still running in your terminal."
       );
     } finally {
+      stopLoadingNarration();
       loading.hidden = true;
       submitBtn.disabled = false;
-      submitBtn.innerHTML = '<span class="btn__label">Find Scholarships</span>';
+      submitBtn.innerHTML = '<span class="btn__label">Find scholarships</span>';
     }
   });
 
