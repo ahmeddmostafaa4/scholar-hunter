@@ -49,9 +49,9 @@ h1, h2, h3, .wordmark {
 }
 
 .shell {
-  max-width: 1140px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 32px;
 }
 
 /* --- Topbar: a document header, ruled off like official paper ------------ */
@@ -85,13 +85,21 @@ h1, h2, h3, .wordmark {
   color: var(--cobalt);
 }
 
-/* --- Hero: the thesis, set in type -------------------------------------- */
+/* --- Page one: thesis on the left, profile sheet on the right ------------ */
 
-/* One centred reading column: hero, then the profile sheet below it. */
-.hero {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 48px 0 36px;
+.profile-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 56px;
+  align-items: start;
+  padding-top: 56px;
+}
+
+.hero { padding: 0; }
+
+@media (min-width: 961px) {
+  /* The thesis keeps the student company while the form scrolls. */
+  .hero { position: sticky; top: 48px; }
 }
 
 .hero__title {
@@ -115,12 +123,13 @@ h1, h2, h3, .wordmark {
   color: var(--ink-soft);
 }
 
-/* The method is a real sequence — search, check, act — so it is numbered. */
+/* The method is a real sequence — search, check, act — so it is numbered
+   and stacked, a procedure written down the hero rail. */
 .chips {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px 28px;
-  margin: 26px 0 0;
+  flex-direction: column;
+  gap: 12px;
+  margin: 30px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -143,16 +152,7 @@ h1, h2, h3, .wordmark {
 
 .page { padding-bottom: 64px; }
 
-.form-wrap {
-  max-width: 640px;
-  margin: 0 auto;
-}
-
-.sheet {
-  max-width: 900px;
-  margin: 0 auto;
-  padding-top: 32px;
-}
+.sheet { padding-top: 32px; }
 
 .card {
   background: var(--surface);
@@ -531,7 +531,14 @@ textarea { resize: vertical; min-height: 92px; font-size: 0.9375rem; }
   color: var(--ink-soft);
 }
 
-.results { display: grid; gap: 18px; }
+/* Cards flow two-up when the page is wide enough; min() keeps the minimum
+   track from ever exceeding the container on small screens. */
+.results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr));
+  gap: 20px;
+  align-items: start;
+}
 
 .result {
   background: var(--surface);
@@ -740,6 +747,7 @@ textarea { resize: vertical; min-height: 92px; font-size: 0.9375rem; }
 
 /* Empty state */
 .empty {
+  grid-column: 1 / -1;
   text-align: center;
   padding: 40px 24px;
   color: var(--ink-soft);
@@ -763,7 +771,11 @@ textarea { resize: vertical; min-height: 92px; font-size: 0.9375rem; }
 /* --- Responsive ----------------------------------------------------------- */
 
 @media (max-width: 960px) {
-  .hero { padding: 40px 0 28px; }
+  .profile-layout {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding-top: 40px;
+  }
   .sheet { padding-top: 20px; }
 }
 
