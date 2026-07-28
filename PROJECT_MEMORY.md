@@ -56,7 +56,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 ## Build status
 
 - [x] Phase 0 — skeleton, .gitignore, GitHub repo, first commit
-- [ ] Phase 1 — LLM connection
+- [x] Phase 1 — LLM connection
 - [ ] Phase 2 — web search tool
 - [ ] Phase 3 — extraction, eligibility, course matching
 - [ ] Phase 4 — agent assembly
@@ -67,7 +67,8 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 
 ## Test results
 
-- Phase 0: `pip install -r requirements.txt` succeeded in `.venv`; stub imports OK; `git status` clean of secrets (`.env`, venvs ignored).
+- Phase 0: `pip install -r requirements.txt` succeeded in `.venv`; `agent`/`app` import; the reused `guc_portal`/`guc_cms` packages import from the repo root; a test asks **git itself** what it tracks and confirms no `.env`/`credentials.json`/`token.json`/venv is staged (`tests/test_phase0_skeleton.py`, 6 passed).
+- Phase 1: live "Reply with exactly: OK" call to `claude-sonnet-4-6` returned OK; `python agent.py` prints the same. Missing/whitespace key raises a typed `MissingKeyError` whose message names the variable and points at `.env`, and `check_llm()` converts it to a result dict — no stack trace, no key echoed (`tests/test_phase1_llm.py`, 4 passed).
 
 ## Setup / keys
 
