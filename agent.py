@@ -12,6 +12,8 @@ import json
 import os
 import re
 from datetime import date as _date
+from datetime import datetime as _datetime
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
@@ -780,6 +782,201 @@ def match_courses(student_courses: str, required_courses: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tool 5: Gmail draft (draft only — never sends)
+# ---------------------------------------------------------------------------
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+CREDENTIALS_FILE = PROJECT_ROOT / "credentials.json"
+TOKEN_FILE = PROJECT_ROOT / "token.json"
+
+EMAIL_UNAVAILABLE = (
+    "Email drafting is not configured. Put a Google OAuth client file at "
+    "credentials.json in the project root (Google Cloud → enable Gmail API → "
+    "OAuth client ID → Desktop app), then run again; the first run opens a "
+    "browser consent screen. Everything else — search, eligibility, deadlines — "
+    "works without it."
+)
+
+
+def gmail_available() -> bool:
+    """True when Gmail drafting could work. Cheap: no network, no OAuth."""
+    return CREDENTIALS_FILE.is_file()
+
+
+def create_gmail_draft(to: str, subject: str, body: str) -> dict:
+    """Create a Gmail DRAFT. Never sends — that is the human-in-the-loop guarantee.
+
+    Returns a result dict; a missing credentials file is a normal, reportable
+    outcome rather than an exception, so the rest of the agent keeps working.
+    """
+    to, subject, body = (to or "").strip(), (subject or "").strip(), (body or "").strip()
+    if not to:
+        return {"ok": False, "error": "No recipient address supplied."}
+    if not subject and not body:
+        return {"ok": False, "error": "The email has no subject and no body."}
+    if not gmail_available():
+        return {"ok": False, "available": False, "error": EMAIL_UNAVAILABLE}
+
+    try:
+        from langchain_google_community import GmailToolkit
+        from langchain_google_community.gmail.utils import (
+            build_resource_service,
+            get_gmail_credentials,
+        )
+
+        credentials = get_gmail_credentials(
+            token_file=str(TOKEN_FILE),
+            client_secrets_file=str(CREDENTIALS_FILE),
+            # Compose scope only, so the agent cannot send even if asked to —
+            # holding no send permission is a stronger guarantee than declining.
+            scopes=["https://www.googleapis.com/auth/gmail.compose"],
+        )
+        toolkit = GmailToolkit(api_resource=build_resource_service(credentials=credentials))
+
+        create_draft = next(
+            (t for t in toolkit.get_tools() if "draft" in t.name.lower()), None
+        )
+        if create_draft is None:
+            return {"ok": False, "error": "The Gmail toolkit exposed no draft tool."}
+
+        result = create_draft.invoke(
+            {"to": [to], "subject": subject, "message": body}
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"Could not create the Gmail draft: {exc}"}
+
+    text = _as_text(result)
+    draft_id = ""
+    match = re.search(r"[Ii]d:?\s*([\w-]+)", text)
+    if match:
+        draft_id = match.group(1)
+
+    return {
+        "ok": True,
+        "drafted": True,
+        "sent": False,  # stated explicitly so no caller can mistake one for the other
+        "to": to,
+        "subject": subject,
+        "draft_id": draft_id,
+        "detail": text,
+        "message": "Draft saved to your Gmail Drafts folder. It has NOT been sent.",
+    }
+
+
+class DraftEmailInput(BaseModel):
+    to: str = Field(description="Recipient email address, e.g. the programme office.")
+    subject: str = Field(description="Subject line.")
+    body: str = Field(description="The full email body, personalised to the student.")
+
+
+@tool("draft_email", args_schema=DraftEmailInput)
+def draft_email(to: str, subject: str, body: str) -> str:
+    """Create a Gmail DRAFT of an inquiry or application email. Never sends it.
+
+    Only call this after the student has explicitly approved this specific email.
+    The draft lands in their Gmail Drafts folder for them to review and send
+    themselves. If Gmail is not configured, this reports that clearly and nothing
+    else about the agent is affected.
+    """
+    outcome = create_gmail_draft(to, subject, body)
+    if not outcome["ok"]:
+        return f"DRAFT NOT CREATED: {outcome['error']}"
+    return (
+        f"Draft created (id: {outcome['draft_id'] or 'unknown'}) to {outcome['to']} — "
+        f"subject '{outcome['subject']}'. It is saved in Gmail Drafts and has NOT been sent."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool 6: save a deadline
+# ---------------------------------------------------------------------------
+
+DEADLINES_FILE = PROJECT_ROOT / "deadlines.json"
+
+
+def _read_deadlines(path: Path) -> list:
+    """Load the store, tolerating an absent, empty, or corrupted file."""
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text() or "[]")
+    except json.JSONDecodeError:
+        # A half-written file must not stop the student saving a new deadline.
+        return []
+    return data if isinstance(data, list) else []
+
+
+def save_deadline_entry(
+    scholarship_name: str, deadline_date: str, url: str = "", path: Path | None = None
+) -> dict:
+    """Append a deadline to deadlines.json, keeping the file valid JSON.
+
+    TODO (Google Calendar): swap this body for a Calendar API insert —
+    build a service with the calendar.events scope, then
+    service.events().insert(calendarId="primary", body={
+        "summary": f"Deadline: {scholarship_name}",
+        "start": {"date": <ISO date>}, "end": {"date": <ISO date>},
+        "description": url,
+    }).execute()
+    It is kept local on purpose: Calendar OAuth must never block the whole agent,
+    and a JSON file is a real, working store to demo against.
+    """
+    path = path or DEADLINES_FILE
+    name = (scholarship_name or "").strip()
+    when = (deadline_date or "").strip()
+    if not name:
+        return {"ok": False, "error": "No scholarship name supplied."}
+    if not when:
+        return {"ok": False, "error": "No deadline date supplied."}
+
+    entry = {
+        "scholarship_name": name,
+        "deadline_date": when,
+        "url": (url or "").strip(),
+        "saved_at": _datetime.now().isoformat(timespec="seconds"),
+    }
+
+    entries = _read_deadlines(path)
+    entries.append(entry)
+    try:
+        # Write via a temp file and replace, so an interrupted write cannot leave
+        # a truncated deadlines.json behind.
+        temp = path.with_suffix(".json.tmp")
+        temp.write_text(json.dumps(entries, indent=2, ensure_ascii=False))
+        temp.replace(path)
+    except Exception as exc:
+        return {"ok": False, "error": f"Could not write {path.name}: {exc}"}
+
+    return {"ok": True, "saved": True, "entry": entry, "total_saved": len(entries)}
+
+
+class SaveDeadlineInput(BaseModel):
+    scholarship_name: str = Field(description="Name of the scholarship or programme.")
+    deadline_date: str = Field(
+        description="The application deadline as stated on its page, e.g. '15 January 2027'."
+    )
+    url: str = Field(default="", description="Source URL for the opportunity.")
+
+
+@tool("save_deadline", args_schema=SaveDeadlineInput)
+def save_deadline(scholarship_name: str, deadline_date: str, url: str = "") -> str:
+    """Save an opportunity's deadline as a reminder in deadlines.json.
+
+    Only call this after the student has explicitly approved saving this deadline.
+    Never save a deadline you did not actually read from the opportunity's page.
+    """
+    outcome = save_deadline_entry(scholarship_name, deadline_date, url)
+    if not outcome["ok"]:
+        return f"DEADLINE NOT SAVED: {outcome['error']}"
+    entry = outcome["entry"]
+    return (
+        f"Saved: {entry['scholarship_name']} — deadline {entry['deadline_date']}"
+        f"{' (' + entry['url'] + ')' if entry['url'] else ''}. "
+        f"{outcome['total_saved']} deadline(s) now stored."
+    )
+
+
+# ---------------------------------------------------------------------------
 # The agent: system prompt, tools, executor
 # ---------------------------------------------------------------------------
 
@@ -862,8 +1059,10 @@ def build_tools(include_actions: bool = True) -> list:
     return tools
 
 
-# Populated in Phase 5 (draft_email, save_deadline).
-ACTION_TOOLS: list = []
+# Tools with side effects. Both require explicit user approval first — that rule
+# lives in the system prompt, and the /search endpoint omits these entirely so the
+# shortlist path cannot touch them even by accident.
+ACTION_TOOLS: list = [draft_email, save_deadline]
 
 
 def build_agent(verbose: bool = False, max_iterations: int = 25) -> "AgentExecutor":
@@ -931,6 +1130,46 @@ def run_agent(user_input: str, chat_history: list | None = None, verbose: bool =
 def describe_tools() -> list[str]:
     """Tool names for the startup banner."""
     return [t.name for t in build_tools()]
+
+
+def status() -> dict:
+    """What is wired up right now — drives the startup banner and /health."""
+    try:
+        import giu_tools
+
+        giu = giu_tools.availability()
+    except Exception:
+        giu = {"portal": False, "cms": False}
+
+    return {
+        "model": MODEL_NAME,
+        "anthropic_key": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
+        "tavily_key": bool((os.getenv("TAVILY_API_KEY") or "").strip()),
+        "gmail_drafting": gmail_available(),
+        "giu_portal": giu.get("portal", False),
+        "giu_cms": giu.get("cms", False),
+        "tools": describe_tools(),
+    }
+
+
+def print_banner() -> None:
+    """Friendly startup summary: what works, what is missing, and why that's fine."""
+    state = status()
+    tick = lambda on: "on " if on else "off"  # noqa: E731
+
+    print(f"  Model            : {state['model']}")
+    print(f"  Anthropic key    : {tick(state['anthropic_key'])}")
+    print(f"  Tavily search    : {tick(state['tavily_key'])}")
+    print(f"  Gmail drafting   : {tick(state['gmail_drafting'])}"
+          f"{'' if state['gmail_drafting'] else '  (optional — add credentials.json)'}")
+    print(f"  GIU portal / CMS : {tick(state['giu_portal'])}/{tick(state['giu_cms'])}"
+          f"{'' if state['giu_portal'] else '  (optional — set GIU_USERNAME/GIU_PASSWORD)'}")
+    print(f"  Tools active     : {', '.join(state['tools'])}")
+
+    if not state["anthropic_key"]:
+        print("\n  ! ANTHROPIC_API_KEY is missing — copy .env.example to .env and add it.")
+    if not state["tavily_key"]:
+        print("  ! TAVILY_API_KEY is missing — search will not run without it.")
 
 
 if __name__ == "__main__":
