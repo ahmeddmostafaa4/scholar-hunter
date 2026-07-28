@@ -121,6 +121,48 @@ def test_silent_page_yields_not_stated_and_unclear():
     assert result["verdict"] == "unclear", result
 
 
+def test_matching_only_the_field_of_study_is_not_enough_for_eligible(monkeypatch):
+    """Regression: a page saying nothing but "Department of Computer Science" got
+    an ELIGIBLE verdict off that one trivially-matching row. Subject alone says
+    nothing about whether this particular student qualifies."""
+    monkeypatch.setattr(
+        agent,
+        "_ask_json",
+        lambda prompt, fallback: {
+            "verdict": "eligible",
+            "reason": "the field matches",
+            "breakdown": [
+                {"requirement": "Field of Study", "required": "Computer Science",
+                 "student": "Computer Science", "status": "met", "note": ""}
+            ],
+            "deadline_status": "not stated",
+        },
+    )
+    result = agent.check_eligibility_for({"field_of_study": "Computer Science"}, STUDENT)
+    assert result["verdict"] == "unclear", result
+
+
+def test_a_discriminating_criterion_does_support_eligible(monkeypatch):
+    """The counterpart: GPA is a real hurdle, so clearing it can support eligible."""
+    monkeypatch.setattr(
+        agent,
+        "_ask_json",
+        lambda prompt, fallback: {
+            "verdict": "eligible",
+            "reason": "gpa and field both clear",
+            "breakdown": [
+                {"requirement": "Field of Study", "required": "CS", "student": "CS",
+                 "status": "met", "note": ""},
+                {"requirement": "Minimum GPA", "required": "3.0", "student": "3.6",
+                 "status": "met", "note": ""},
+            ],
+            "deadline_status": "open",
+        },
+    )
+    result = agent.check_eligibility_for({"minimum_gpa": "3.0"}, STUDENT)
+    assert result["verdict"] == "eligible", result
+
+
 def test_silence_is_never_treated_as_permission(monkeypatch):
     """Regression: with no criteria stated, 'nothing was unmet' is vacuously true.
     The tool must not turn that into 'eligible'."""

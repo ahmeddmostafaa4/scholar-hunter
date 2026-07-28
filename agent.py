@@ -63,6 +63,22 @@ TRUSTED_DOMAINS = [
 # How many raw results to pull back per query.
 SEARCH_RESULTS = 8
 
+# Social networks, forums and video sites. A post about a scholarship is not the
+# scholarship, and its "requirements" cannot be trusted or cited.
+BLOCKED_DOMAINS = [
+    "facebook.com",
+    "instagram.com",
+    "twitter.com",
+    "x.com",
+    "tiktok.com",
+    "youtube.com",
+    "reddit.com",
+    "quora.com",
+    "pinterest.com",
+    "linkedin.com/posts",
+    "t.me",
+]
+
 
 class MissingKeyError(RuntimeError):
     """Raised when a required API key is absent.
@@ -166,6 +182,8 @@ def _clean_results(raw) -> list[dict]:
         url = (item.get("url") or "").strip()
         if not url.startswith("http"):
             continue  # no source URL means we cannot cite it, so we drop it
+        if any(blocked in url.lower() for blocked in BLOCKED_DOMAINS):
+            continue  # a social post about a scholarship is not the scholarship
         cleaned.append(
             {
                 "title": (item.get("title") or "").strip() or url,
@@ -398,7 +416,16 @@ def extract_requirements_from(source: str, page_text: str = "") -> dict:
 Return ONLY a JSON object with exactly these keys:
   minimum_gpa, degree_level, eligible_nationalities, language_requirement,
   field_of_study, deadline, funding_scope, required_courses, opportunity_name,
-  opportunity_type, institution
+  opportunity_type, institution, is_single_opportunity
+
+FIRST decide "is_single_opportunity" (true/false):
+- true  = this page describes ONE specific named opportunity a student can apply to.
+- false = this page is a LIST, directory, search-results page, blog round-up or
+  news post covering many opportunities (titles like "93 Scholarships in Germany",
+  "Top 10 Fully Funded Masters", "Browse scholarships"), or an index page.
+  A student cannot apply to a list, so this distinction matters.
+If it is false, still fill in what the page states, but do not stitch together
+requirements belonging to different opportunities — set those to "{NOT_STATED}".
 
 Rules — these matter more than completeness:
 - Use ONLY what the text below actually states. Never infer, never guess, never
@@ -430,6 +457,9 @@ TEXT:
         "name": parsed.get("opportunity_name", NOT_STATED),
         "type": parsed.get("opportunity_type", NOT_STATED),
         "institution": parsed.get("institution", NOT_STATED),
+        # Default to False: if the model did not confirm this is one specific
+        # opportunity, treat it as a listing rather than assume it is applicable.
+        "is_single_opportunity": parsed.get("is_single_opportunity") is True,
         "requirements": requirements,
         "note": parsed.get("error", fetch_note),
     }
@@ -462,6 +492,12 @@ def extract_requirements(scholarship_url_or_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 VERDICTS = {"eligible", "not_eligible", "unclear"}
+
+
+def _is_field_of_study(row: dict) -> bool:
+    """True for the 'field of study' row, which on its own proves nothing."""
+    label = str(row.get("requirement", "")).strip().lower()
+    return "field" in label and "study" in label
 
 
 def _as_dict(value, what: str) -> dict:
@@ -518,6 +554,8 @@ Return ONLY a JSON object:
 {{
   "verdict": "eligible" | "not_eligible" | "unclear",
   "reason": "<one sentence explaining the verdict>",
+  "fit": "<one sentence on why this opportunity suits THIS student — their field, "
+         "level and goals. Be concrete and honest; if the fit is weak, say so.>",
   "deadline_status": "open" | "expired" | "not stated",
   "breakdown": [
     {{"requirement": "<e.g. Minimum GPA>",
@@ -580,18 +618,22 @@ Rules — follow these exactly:
 
     # Silence is not permission. A page that states nothing checkable cannot make
     # a student eligible, however tempting the vacuous "nothing was unmet" logic is.
-    stated = any(
-        str(criteria.get(f, NOT_STATED)).strip().lower() not in {NOT_STATED, "", "[]", "none"}
-        for f in ELIGIBILITY_FIELDS
-    )
-    confirmed = any(r["status"] == "met" for r in breakdown)
-    if verdict == "eligible" and not (stated and confirmed):
+    #
+    # Matching the field of study alone is not enough either: "Department of
+    # Computer Science" tells us the subject and nothing about whether THIS student
+    # qualifies. Claiming "eligible" on that basis is exactly the overselling the
+    # reliability rules forbid, so an eligible verdict has to rest on at least one
+    # criterion that actually discriminates between applicants.
+    if verdict == "eligible" and not any(
+        row["status"] == "met" and not _is_field_of_study(row) for row in breakdown
+    ):
         verdict = "unclear"
 
     return {
         "ok": True,
         "verdict": verdict,
         "reason": parsed.get("reason", ""),
+        "fit": parsed.get("fit", ""),
         "deadline_status": deadline_status,
         "breakdown": breakdown,
         "note": parsed.get("error", ""),
@@ -1125,6 +1167,248 @@ def run_agent(user_input: str, chat_history: list | None = None, verbose: bool =
         "tools_used": tools_used,
         "steps": len(steps),
     }
+
+
+# ---------------------------------------------------------------------------
+# The shortlist pipeline (what /search runs)
+# ---------------------------------------------------------------------------
+
+# Profile fields we need before searching is worthwhile.
+REQUIRED_PROFILE_FIELDS = {
+    "field_of_study": "field of study",
+    "degree_level": "current degree level",
+    "nationality": "country or nationality",
+}
+
+# Human labels for the requirement rows shown on a card.
+REQUIREMENT_LABELS = {
+    "minimum_gpa": "Minimum GPA",
+    "degree_level": "Degree level",
+    "eligible_nationalities": "Eligible nationalities",
+    "language_requirement": "Language",
+    "field_of_study": "Field of study",
+    "required_courses": "Required courses",
+}
+
+
+def missing_profile_fields(profile: dict) -> list[str]:
+    """Key fields the student has not filled in — the agent must ask before searching."""
+    return [
+        label
+        for key, label in REQUIRED_PROFILE_FIELDS.items()
+        if not str(profile.get(key, "") or "").strip()
+    ]
+
+
+def build_query(profile: dict) -> str:
+    """Turn a profile into a search query aimed at real opportunity pages."""
+    parts = []
+    degree = str(profile.get("degree_level", "")).strip()
+    # A Bachelor's holder wants Master's funding, not more Bachelor's funding.
+    next_level = {
+        "bachelor's": "Master's",
+        "bachelors": "Master's",
+        "master's": "PhD",
+        "masters": "PhD",
+    }.get(degree.lower(), degree or "graduate")
+
+    parts.append(f"{next_level} scholarship")
+    if field := str(profile.get("field_of_study", "")).strip():
+        parts.append(field)
+    if interests := str(profile.get("interests", "")).strip():
+        parts.append(interests)
+    if nationality := str(profile.get("nationality", "")).strip():
+        parts.append(f"for {nationality} students")
+    parts.append("eligibility requirements deadline")
+    return " ".join(parts)
+
+
+def _assess_one(result: dict, profile: dict, courses: list) -> dict | None:
+    """Extract, check and course-match a single search result into a card.
+
+    Returns None for anything clearly ineligible or expired — the spec says to
+    discard those rather than show them.
+    """
+    extracted = extract_requirements_from(result["url"])
+    requirements = extracted.get("requirements", {})
+
+    # A directory or "Top 10 scholarships" round-up is not something a student can
+    # apply to, and its vague blanket criteria ("Computer Science", "Masters")
+    # match almost anyone — which produced confidently wrong "eligible" cards.
+    if not extracted.get("is_single_opportunity", False):
+        return {"_skipped": "listing"}
+
+    eligibility = check_eligibility_for(requirements, profile)
+    if not eligibility.get("ok"):
+        return None
+
+    verdict = eligibility["verdict"]
+    if verdict == "not_eligible":
+        return {"_skipped": "ineligible"}  # clearly ineligible or expired
+
+    course_match = match_courses_for(courses, requirements.get("required_courses", []))
+
+    # Build the requirement rows, keeping the extracted values so a card shows what
+    # the page actually said next to the verdict.
+    rows = []
+    seen = set()
+    for row in eligibility.get("breakdown", []):
+        label = str(row.get("requirement", "")).strip() or "Requirement"
+        seen.add(label.lower())
+        rows.append(
+            {
+                "label": label,
+                "required": str(row.get("required", NOT_STATED)),
+                "student": str(row.get("student", "not provided")),
+                "status": row["status"],
+                "note": str(row.get("note", "")),
+            }
+        )
+    # Surface any stated requirement the breakdown skipped, so nothing is hidden.
+    for key, label in REQUIREMENT_LABELS.items():
+        value = requirements.get(key, NOT_STATED)
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value) if value else NOT_STATED
+        if label.lower() in seen or str(value).strip().lower() in {NOT_STATED, "", "none"}:
+            continue
+        rows.append(
+            {
+                "label": label,
+                "required": str(value),
+                "student": "not provided",
+                "status": "not_stated",
+                "note": "Stated by the programme; not confirmed against your profile.",
+            }
+        )
+
+    name = extracted.get("name", NOT_STATED)
+    if not name or name == NOT_STATED:
+        name = result["title"]
+
+    return {
+        # 1. Name & type
+        "name": name,
+        "type": extracted.get("type", NOT_STATED),
+        "institution": extracted.get("institution", NOT_STATED),
+        # 2. Fit
+        "fit": eligibility.get("fit") or eligibility.get("reason", ""),
+        # 3. Requirements & eligibility
+        "verdict": verdict,
+        "verdict_reason": eligibility.get("reason", ""),
+        "requirements": rows,
+        # 4. Course match
+        "course_match": {
+            "assessed": course_match.get("assessed", False),
+            "summary": course_match.get("summary", "not assessed"),
+            "matched": course_match.get("matched", 0),
+            "partial": course_match.get("partial", 0),
+            "total": course_match.get("total", 0),
+            "confidence_capped": course_match.get("confidence_capped", False),
+            "matches": course_match.get("matches", []),
+        },
+        # 5. Deadline & funding
+        "deadline": str(requirements.get("deadline", NOT_STATED)),
+        "deadline_status": eligibility.get("deadline_status", NOT_STATED),
+        "funding": str(requirements.get("funding_scope", NOT_STATED)),
+        # 6. Source
+        "url": result["url"],
+        "trusted_source": result.get("trusted", False),
+    }
+
+
+def run_shortlist(profile: dict, max_results: int = 5, candidates: int = 12) -> dict:
+    """Profile in, ranked uniform shortlist out. This is what POST /search runs.
+
+    Orchestrates the same tool functions the conversational agent uses, but in a
+    fixed order, so every card is guaranteed to carry the same six fields. A form
+    -> cards UI has no conversation in which to recover from a malformed reply, so
+    determinism matters more than flexibility here.
+    """
+    profile = profile or {}
+
+    missing = missing_profile_fields(profile)
+    if missing:
+        return {
+            "ok": False,
+            "needs_profile": missing,
+            "error": "Please fill in: " + ", ".join(missing) + ".",
+            "results": [],
+        }
+
+    search = search_opportunities(build_query(profile), max_results=candidates)
+    if not search["ok"]:
+        return {"ok": False, "error": search["error"], "results": []}
+    if not search["results"]:
+        return {
+            "ok": True,
+            "results": [],
+            "query": search.get("query", ""),
+            "message": (
+                "No opportunities were found for this profile. Nothing has been "
+                "invented to fill the gap — try broadening your field or interests."
+            ),
+        }
+
+    courses = _as_list(profile.get("courses", []))
+
+    # Each candidate needs a page fetch plus two model calls, so run them in
+    # parallel — serially this takes the better part of a minute.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(6, len(search["results"]))) as pool:
+        assessed = list(
+            pool.map(lambda r: _safe_assess(r, profile, courses), search["results"])
+        )
+
+    items = [item for item in assessed if item and "_skipped" not in item]
+    skipped_listings = sum(1 for a in assessed if a and a.get("_skipped") == "listing")
+    skipped_ineligible = sum(1 for a in assessed if a and a.get("_skipped") == "ineligible")
+
+    # Rank: confirmed eligible first, then by how much of the course list matched,
+    # then trusted sources ahead of the rest.
+    order = {"eligible": 0, "unclear": 1}
+    items.sort(
+        key=lambda i: (
+            order.get(i["verdict"], 2),
+            -(i["course_match"]["matched"]),
+            not i["trusted_source"],
+        )
+    )
+    items = items[:max_results]
+
+    notes = []
+    if skipped_ineligible:
+        notes.append(f"{skipped_ineligible} clearly ineligible or expired")
+    if skipped_listings:
+        notes.append(f"{skipped_listings} directory/round-up page(s) you cannot apply to")
+
+    if items:
+        message = f"Skipped {' and '.join(notes)}." if notes else ""
+    else:
+        message = (
+            "No opportunity you can directly apply to was found for this profile"
+            + (f" — skipped {' and '.join(notes)}." if notes else ".")
+            + " Nothing has been invented to fill the gap; try broadening your "
+            "field or interests."
+        )
+
+    return {
+        "ok": True,
+        "query": search.get("query", ""),
+        "results": items,
+        "considered": len(search["results"]),
+        "skipped_listings": skipped_listings,
+        "skipped_ineligible": skipped_ineligible,
+        "message": message,
+    }
+
+
+def _safe_assess(result: dict, profile: dict, courses: list) -> dict | None:
+    """_assess_one, but one bad page cannot sink the whole shortlist."""
+    try:
+        return _assess_one(result, profile, courses)
+    except Exception:
+        return None
 
 
 def describe_tools() -> list[str]:
