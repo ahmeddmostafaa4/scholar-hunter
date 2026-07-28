@@ -286,6 +286,26 @@ ELIGIBILITY_FIELDS = [
 NOT_STATED = "not stated"
 
 
+def _as_text(content) -> str:
+    """Flatten a Claude response into a plain string.
+
+    Claude returns a list of content blocks (text, thinking, tool_use) rather than
+    a bare string, so anything downstream — the Flask JSON, the CLI, the tests —
+    gets a list unless it is flattened here.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts)
+    return str(content or "")
+
+
 def _ask_json(prompt: str, *, fallback: dict) -> dict:
     """Ask Claude for a JSON object and parse it. Returns `fallback` on failure.
 
@@ -293,14 +313,11 @@ def _ask_json(prompt: str, *, fallback: dict) -> dict:
     outermost {...} rather than trusting the whole string to parse.
     """
     try:
-        raw = build_llm().invoke(prompt).content
+        raw = _as_text(build_llm().invoke(prompt).content)
     except MissingKeyError as exc:
         return {**fallback, "error": str(exc)}
     except Exception as exc:
         return {**fallback, "error": f"Model call failed: {exc}"}
-
-    if isinstance(raw, list):  # content can arrive as a list of blocks
-        raw = "".join(part.get("text", "") for part in raw if isinstance(part, dict))
 
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
@@ -762,7 +779,181 @@ def match_courses(student_courses: str, required_courses: str) -> str:
     return json.dumps(outcome, indent=2, ensure_ascii=False)
 
 
+# ---------------------------------------------------------------------------
+# The agent: system prompt, tools, executor
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = """You are Scholar Hunter, an agent that helps graduate students find and apply for scholarships, grants, and travel funding.
+
+Today's date is {today}. Use it to judge whether a deadline has passed.
+
+Work in this order:
+
+1. UNDERSTAND THE PROFILE — field of study, degree level, GPA, nationality/country,
+   interests, and optionally the student's completed undergraduate courses. If a key
+   field is missing, ASK the student for it before continuing rather than guessing.
+   If they did not give their courses you may proceed, but note that providing
+   courses improves course-matching accuracy.
+
+2. SEARCH — use search_scholarships to find relevant scholarships, grants, master's
+   programmes and workshops. Prefer trusted portals and official sources
+   (Mastersportal.eu, Erasmus+/Erasmus Mundus, DAAD, Chevening, Fulbright, official
+   university programme pages) while still allowing other credible results. Then, for
+   each promising result, call extract_requirements on its URL to read that page's
+   ACTUAL stated requirements — minimum GPA, degree level, eligible nationalities,
+   language requirement, field, deadline, funding scope, and any required or
+   prerequisite courses. Pull these from the opportunity's own page, never from
+   assumption or memory.
+
+3. CHECK ELIGIBILITY — call check_eligibility to compare each opportunity's extracted
+   requirements against the student, requirement by requirement. When the programme
+   lists required/prerequisite courses AND the student provided their undergraduate
+   courses, also call match_courses: it matches by course DESCRIPTION AND CONTENT,
+   not by title, so equivalent courses with different names across universities still
+   count. Keep the matches; discard anything clearly ineligible or expired.
+
+4. PRESENT A RANKED SHORTLIST — best matches first. Every item uses the SAME ~6-bullet
+   format so results are easy to compare:
+     1. Name & type (scholarship / master's programme / workshop) and institution
+     2. Fit — one line on why it matches this student
+     3. Requirements & eligibility — the key requirements, each marked met / not met / not stated
+     4. Course match — e.g. "4 of 5 required courses matched", or "not assessed"
+     5. Deadline & funding — the deadline (or "not stated") and what the funding covers
+     6. Source — the URL
+
+5. ACT ONLY AFTER APPROVAL — only once the student explicitly approves may you draft
+   an inquiry/application email or save a deadline reminder.
+
+RELIABILITY RULES — these matter more than being helpful or impressive:
+- NEVER invent scholarships, amounts, deadlines, or requirements. Report only what
+  you actually found, and always include the source URL.
+- NEVER send an email or save a calendar/deadline entry without explicit user
+  approval in the conversation. Drafting is not sending; you may only ever draft.
+- If eligibility is unclear or information is missing, SAY SO and flag it. Do not
+  oversell a match and do not fill gaps with guesses. "The page does not state a
+  minimum GPA" is a better answer than a plausible number.
+- When uncertain, state the uncertainty plainly.
+- If a search returns nothing, say that nothing was found. Do not manufacture
+  results to seem useful."""
+
+
+def build_tools(include_actions: bool = True) -> list:
+    """Assemble the agent's toolbox.
+
+    `include_actions` covers the tools with side effects (email drafts, saved
+    deadlines); Phase 5 adds them. Optional GIU portal/CMS tools are appended when
+    those packages are present.
+    """
+    tools = [
+        search_scholarships,
+        extract_requirements,
+        check_eligibility,
+        match_courses,
+    ]
+    if include_actions:
+        tools.extend(ACTION_TOOLS)
+
+    try:
+        import giu_tools
+
+        tools.extend(giu_tools.optional_tools())
+    except Exception:
+        pass  # the GIU integration is optional and must never block the agent
+    return tools
+
+
+# Populated in Phase 5 (draft_email, save_deadline).
+ACTION_TOOLS: list = []
+
+
+def build_agent(verbose: bool = False, max_iterations: int = 25) -> "AgentExecutor":
+    """Build the tool-calling agent plus its executor.
+
+    Raises MissingKeyError if ANTHROPIC_API_KEY is absent — callers convert that
+    into a clean message rather than letting it surface as a stack trace.
+    """
+    from langchain.agents import AgentExecutor, create_tool_calling_agent
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", SYSTEM_PROMPT.format(today=_date.today().isoformat())),
+            MessagesPlaceholder("chat_history", optional=True),
+            ("human", "{input}"),
+            MessagesPlaceholder("agent_scratchpad"),
+        ]
+    )
+
+    tools = build_tools()
+    agent_runnable = create_tool_calling_agent(build_llm(), tools, prompt)
+    return AgentExecutor(
+        agent=agent_runnable,
+        tools=tools,
+        verbose=verbose,
+        max_iterations=max_iterations,
+        # Surface tool errors to the model so it can recover, rather than dying.
+        handle_parsing_errors=True,
+        return_intermediate_steps=True,
+    )
+
+
+def run_agent(user_input: str, chat_history: list | None = None, verbose: bool = False) -> dict:
+    """Run one turn of the agent. Returns a result dict; never raises."""
+    try:
+        executor = build_agent(verbose=verbose)
+    except MissingKeyError as exc:
+        return {"ok": False, "error": str(exc), "output": ""}
+
+    try:
+        result = executor.invoke(
+            {"input": user_input, "chat_history": chat_history or []}
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"The agent run failed: {exc}", "output": ""}
+
+    # Record which tools ran — the UI and the tests both want to see that the
+    # agent actually searched rather than answering from memory.
+    steps = result.get("intermediate_steps", []) or []
+    tools_used = []
+    for action, _observation in steps:
+        name = getattr(action, "tool", None)
+        if name and name not in tools_used:
+            tools_used.append(name)
+
+    return {
+        "ok": True,
+        "output": _as_text(result.get("output", "")),
+        "tools_used": tools_used,
+        "steps": len(steps),
+    }
+
+
+def describe_tools() -> list[str]:
+    """Tool names for the startup banner."""
+    return [t.name for t in build_tools()]
+
+
 if __name__ == "__main__":
     print(f"Scholar Hunter — checking Claude connection ({MODEL_NAME})...")
     result = check_llm()
-    print("  OK:", result["reply"]) if result["ok"] else print("  FAILED:", result["error"])
+    if not result["ok"]:
+        print("  FAILED:", result["error"])
+        raise SystemExit(1)
+    print("  OK:", result["reply"])
+    print("  Tools:", ", ".join(describe_tools()))
+
+    print("\nCLI test mode. Describe your profile, or press Enter for a sample.\n")
+    try:
+        typed = input("> ").strip()
+    except EOFError:
+        typed = ""
+    profile = typed or (
+        "I have a Bachelor's in Computer Science from Egypt, GPA 3.6/4.0. "
+        "I want Master's scholarships in Germany in machine learning."
+    )
+    if not typed:
+        print(f"(using sample: {profile})")
+
+    outcome = run_agent(profile, verbose=True)
+    print("\n" + "=" * 70)
+    print(outcome["output"] if outcome["ok"] else f"FAILED: {outcome['error']}")

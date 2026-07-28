@@ -51,7 +51,8 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 | `match_courses` | student courses, required courses | per required course: matched/partial/missing + which course + confidence | LLM reasoning |
 | `draft_email` | to, subject, body | Gmail draft ID (never sends) | Gmail API (OAuth) |
 | `save_deadline` | name, date, url | appended entry | local `deadlines.json` |
-| `get_giu_transcript` (optional) | — | GPA + completed courses | `guc_portal` (reused) |
+| `get_giu_transcript` (optional) | year code | GPA + completed courses (+ a note that GUC GPA is lower-is-better) | `guc_portal` (reused) |
+| `get_giu_cms_courses` (optional) | — | currently enrolled courses | `guc_cms` (reused) |
 
 ## Build status
 
@@ -59,7 +60,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 - [x] Phase 1 — LLM connection
 - [x] Phase 2 — web search tool
 - [x] Phase 3 — extraction, eligibility, course matching
-- [ ] Phase 4 — agent assembly
+- [x] Phase 4 — agent assembly
 - [ ] Phase 5 — Gmail draft + save_deadline
 - [ ] Phase 6 — Flask backend
 - [ ] Phase 7 — web frontend
@@ -68,6 +69,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 ## Test results
 
 - Phase 0: `pip install -r requirements.txt` succeeded in `.venv`; `agent`/`app` import; the reused `guc_portal`/`guc_cms` packages import from the repo root; a test asks **git itself** what it tracks and confirms no `.env`/`credentials.json`/`token.json`/venv is staged (`tests/test_phase0_skeleton.py`, 6 passed).
+- Phase 4: agent assembles via `create_tool_calling_agent` + `AgentExecutor` with 6 tools (4 core + the 2 optional GIU ones, both live here). Live end-to-end run on a real profile called `search_scholarships`, cited real https sources, and covered deadline + eligibility; a bare "can you find me a scholarship?" made it ask for the missing profile fields instead of searching. System prompt asserted to carry the reliability rules and today's date. One real bug fixed: the agent's `output` arrived as a list of Claude content blocks, not a string, which would have broken the JSON API downstream (`tests/test_phase4_agent.py`, 9 passed).
 - Phase 3: (a) fully-stated page + matching profile -> `eligible`, every row `met`, deadline `open`; (b) page requiring an already-held Master's vs a Bachelor's student -> `not_eligible` with the degree row identified as the failure; (c) page stating nothing checkable -> all fields `not stated` and verdict `unclear`. Course matching: differently-named-but-equivalent courses matched by description; a genuinely absent course reported `missing`; bare names (no descriptions) cap confidence below `high`; no courses on either side returns "not assessed" **without calling the model at all**. Two real bugs found and fixed while testing (see below). `tests/test_phase3_eligibility.py`, 17 passed; full suite 34 passed.
 - Phase 2: live Tavily queries ("Master's Data Science scholarship Germany 2026", "PhD funding for Egyptian students") returned real DAAD and Mastersportal URLs with trusted sources ranked first; a nonsense query returned cleanly instead of raising; an empty query is rejected without spending an API call; a missing key gives a clear `.env` message; the zero-result path explicitly tells the agent not to invent opportunities (`tests/test_phase2_search.py`, 7 passed).
 - Phase 1: live "Reply with exactly: OK" call to `claude-sonnet-4-6` returned OK; `python agent.py` prints the same. Missing/whitespace key raises a typed `MissingKeyError` whose message names the variable and points at `.env`, and `check_llm()` converts it to a result dict — no stack trace, no key echoed (`tests/test_phase1_llm.py`, 4 passed).
