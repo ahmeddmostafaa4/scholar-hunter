@@ -1,0 +1,26 @@
+[project]
+name = "cms-app"
+version = "0.1.0"
+description = "GIU workshop: turn the GUC CMS into agent tools (content into context, and download)."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # the CMS client (guc_cms/ sits next to the notebooks)
+    "requests>=2.31",
+    "requests-ntlm>=1.2",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    # any file -> markdown (PDF, Excel, Word, PowerPoint)
+    "markitdown[pdf,xlsx,docx,pptx]>=0.0.1a2",
+    # the agent
+    "langchain>=1.0",
+    "langchain-anthropic>=0.3",
+    "python-dotenv>=1.0",
+    # to run the notebooks
+    "jupyterlab>=4.0",
+    "ipykernel>=6.0",
+]
+
+# This folder is an app, not a library. uv builds a venv from the deps above and
+# the notebooks import guc_cms from the local folder next to them.
+[tool.uv]
+package = false

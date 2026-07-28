@@ -1,0 +1,108 @@
+# PROJECT_MEMORY — Scholar Hunter
+
+> Living record. Update at the end of every phase. Single source of truth for project state.
+
+## Overview
+
+Scholar Hunter is a locally-run agentic assistant (LangChain + Claude) that helps
+graduate students find scholarships, grants, master's programs, and workshops they
+are actually eligible for. It reads the student's profile (field, degree level, GPA,
+nationality, interests, and optionally their completed undergraduate courses),
+searches the web via Tavily preferring trusted portals (Mastersportal, DAAD,
+Erasmus+, Chevening, Fulbright, official university pages), extracts each
+opportunity's real requirements from its own page, checks eligibility requirement by
+requirement (including description-based course matching), and presents a ranked
+shortlist in a uniform ~6-bullet format. Only after explicit user approval does it
+create a Gmail *draft* (never sends) or save a deadline to `deadlines.json`.
+Everything runs locally from VS Code (`python app.py` → http://localhost:5000).
+
+## Architecture
+
+- **Stack:** Python 3.12, LangChain 0.3 (`create_tool_calling_agent` + `AgentExecutor`),
+  `ChatAnthropic` with model `claude-sonnet-4-6`, Tavily search, Flask + flask-cors,
+  plain HTML/CSS/JS frontend. No deployment — local dev loop only.
+- **Files:**
+  - `agent.py` — the LangChain agent: LLM, all tools, system prompt. Importable; has a CLI mode.
+  - `giu_tools.py` — optional reuse of the existing `portal-app/guc_portal` and
+    `cms-app/guc_cms` packages (transcript → GPA + completed courses; CMS → course list).
+  - `app.py` — Flask server: serves the frontend, exposes `/search`, `/draft_email`, `/save_deadline`.
+  - `templates/index.html`, `static/style.css`, `static/script.js` — the web UI.
+  - `tests/` — pytest, added per phase.
+  - `deadlines.json` — created at runtime by the save_deadline tool.
+- **Existing local resources (reused, not rebuilt):**
+  - `portal-app/guc_portal` — GIU/GUC student portal (SIS) client. Gives
+    `GucPortal.get_transcript()` → cumulative GPA + per-semester course rows,
+    `available_years()`, `get_transcript_year()`, previous/current grades.
+    Old and slow; rate-limits (~1 req/min), retries internally.
+  - `cms-app/guc_cms` — GUC CMS client. `GucCms.list_courses()`, `find_course()`,
+    `get_content()` (files by week), `fetch_bytes()`, `download()`. NTLM auth.
+  - Both are plain packages (no agent knowledge); `giu_tools.py` adds them to
+    `sys.path` and wraps them as optional LangChain tools. Credentials come from
+    `GIU_USERNAME`/`GIU_PASSWORD` in `.env`; if absent the tools report themselves
+    unavailable and the app still works with typed/uploaded courses.
+
+## Tools
+
+| Tool | Inputs | Outputs | Connector |
+|---|---|---|---|
+| `search_scholarships` | query | titles, snippets, URLs | Tavily |
+| `extract_requirements` | url or text | structured requirements (GPA, degree, nationality, language, field, deadline, funding, required courses; "not stated" when absent) | requests + LLM |
+| `check_eligibility` | requirements, profile | verdict + per-requirement met/not met/not stated | LLM reasoning |
+| `match_courses` | student courses, required courses | per required course: matched/partial/missing + which course + confidence | LLM reasoning |
+| `draft_email` | to, subject, body | Gmail draft ID (never sends) | Gmail API (OAuth) |
+| `save_deadline` | name, date, url | appended entry | local `deadlines.json` |
+| `get_giu_transcript` (optional) | — | GPA + completed courses | `guc_portal` (reused) |
+
+## Build status
+
+- [x] Phase 0 — skeleton, .gitignore, GitHub repo, first commit
+- [ ] Phase 1 — LLM connection
+- [ ] Phase 2 — web search tool
+- [ ] Phase 3 — extraction, eligibility, course matching
+- [ ] Phase 4 — agent assembly
+- [ ] Phase 5 — Gmail draft + save_deadline
+- [ ] Phase 6 — Flask backend
+- [ ] Phase 7 — web frontend
+- [ ] Phase 8 — full integration pass
+
+## Test results
+
+- Phase 0: `pip install -r requirements.txt` succeeded in `.venv`; stub imports OK; `git status` clean of secrets (`.env`, venvs ignored).
+
+## Setup / keys
+
+- `.env` (never committed): `ANTHROPIC_API_KEY`, `TAVILY_API_KEY`, optional `GIU_USERNAME`/`GIU_PASSWORD`.
+- Gmail: `credentials.json` in project root (Google Cloud OAuth Desktop client, Gmail API enabled); first draft creation opens browser consent and writes `token.json`. Both git-ignored. **Email is optional** — search works without it.
+- Run: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`, then `python app.py` → http://localhost:5000. CLI test mode: `python agent.py`.
+- GitHub repo: https://github.com/ahmeddmostafaa4/scholar-hunter (public).
+
+## Decisions & constraints
+
+- Email is **draft-only** by design (human-in-the-loop); the agent never sends.
+- Calendar is a local `deadlines.json` store for now; a clearly-marked TODO in
+  `agent.py` shows where Google Calendar API would slot in. Calendar OAuth must not
+  block the agent.
+- Search + eligibility + shortlist must work with **no Gmail credentials**; only the
+  Draft email button degrades (styled "email not configured" message).
+- Reliability rules are baked into the system prompt: never invent opportunities or
+  deadlines, always cite source URLs, flag "not stated"/unclear honestly, never
+  send/save without explicit approval.
+- Uniform output: every shortlist item uses the same ~6-bullet structure (name & type,
+  fit, requirements & eligibility, course match, deadline & funding, source) in both
+  the backend JSON and the frontend cards.
+- Frontend is one static page, plain HTML/CSS/JS, white + blue, gradient hero, a few
+  hand-written animations. No frameworks, no npm, no build step.
+- LangChain pinned to the 0.3 line so `create_tool_calling_agent` + `AgentExecutor`
+  match the spec (LangChain 1.x renamed this surface).
+- `cms-app/` and `portal-app/` are **reused in place** via `sys.path` (folder names
+  differ from the spec's `cms/`/`portal/` — they were already named this way).
+  Their `.venv`s and `.env`s are git-ignored; the small `guc_cms`/`guc_portal`
+  packages are committed with the repo.
+- Portal is slow/rate-limited → the GIU transcript tool is opt-in (button/CLI), not
+  part of the default `/search` path.
+
+## Known issues / next steps
+
+- Google Calendar integration still a TODO (deadline store is local JSON).
+- Portal transcript fetch is slow (~1 req/min rate limit) — used only on demand.
+- Tavily free tier caps requests; heavy testing can exhaust the quota.

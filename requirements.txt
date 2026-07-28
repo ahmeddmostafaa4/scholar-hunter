@@ -1,0 +1,25 @@
+# Scholar Hunter — pinned after `pip install` in Phase 0 (see README).
+# LangChain 0.3 line: matches the create_tool_calling_agent + AgentExecutor API.
+langchain>=0.3,<0.4
+langchain-community>=0.3,<0.4
+langchain-anthropic>=0.3,<0.4
+
+# Web server (local only)
+flask>=3.0
+flask-cors>=4.0
+
+# Config / parsing
+python-dotenv>=1.0
+pypdf>=4.0
+requests>=2.31
+beautifulsoup4>=4.12
+
+# Gmail draft tool (OAuth + Gmail API via LangChain's GmailToolkit)
+langchain-google-community[gmail]>=2.0
+
+# GIU portal/CMS reuse (guc_portal / guc_cms packages use NTLM + lxml)
+requests-ntlm>=1.2
+lxml>=5.0
+
+# Tests
+pytest>=8.0

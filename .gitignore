@@ -1,0 +1,20 @@
+# Secrets — never commit these
+.env
+credentials.json
+token.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.python-version
+
+# Runtime data
+deadlines.json
+uploads/
+
+# OS / editor noise
+.DS_Store
+.dist/
+.ipynb_checkpoints/

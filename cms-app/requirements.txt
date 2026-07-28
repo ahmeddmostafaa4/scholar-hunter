@@ -1,0 +1,13 @@
+# Third-party dependencies. The guc_cms / guc_portal packages are local (they
+# sit in this folder), so they are imported directly and not listed here.
+#   pip install -r requirements.txt
+requests>=2.31
+requests-ntlm>=1.2
+beautifulsoup4>=4.12
+lxml>=5.0
+markitdown[pdf,xlsx,docx,pptx]>=0.0.1a2
+langchain>=1.0
+langchain-anthropic>=0.3
+python-dotenv>=1.0
+jupyterlab>=4.0
+ipykernel>=6.0

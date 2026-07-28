@@ -1,0 +1,23 @@
+[project]
+name = "guc-portal"
+version = "0.1.0"
+description = "A tiny Python client for the GUC/GIU student portal (SIS): transcript and grades."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "requests>=2.31",
+    "requests-ntlm>=1.2",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    # for the tools notebook (wrapping the package as LangChain tools)
+    "langchain>=1.0",
+    "langchain-anthropic>=0.3",
+    "python-dotenv>=1.0",
+    "jupyterlab>=4.0",
+    "ipykernel>=6.0",
+    "ipywidgets>=8.1.8",
+]
+
+# An app now (it carries a notebook), so uv builds a venv from the deps and the
+# notebook imports guc_portal from this folder.
+[tool.uv]
+package = false
