@@ -5,13 +5,52 @@
 
   const form = document.getElementById("profile-form");
   const submitBtn = document.getElementById("submit-btn");
-  const idle = document.getElementById("idle");
+  const profileView = document.getElementById("profile-view");
+  const resultsView = document.getElementById("results-view");
+  const profileStrip = document.getElementById("profile-strip");
+  const editProfileBtn = document.getElementById("edit-profile");
+  const backlinkRow = document.getElementById("backlink-row");
+  const backToResultsBtn = document.getElementById("back-to-results");
   const loading = document.getElementById("loading");
   const loadingText = document.getElementById("loading-text");
   const resultsEl = document.getElementById("results");
   const summaryEl = document.getElementById("results-summary");
   const errorBanner = document.getElementById("error-banner");
   const errorText = document.getElementById("error-text");
+
+  // The two pages of the app. The form is only hidden, never destroyed, so
+  // editing the profile keeps everything the student already typed.
+  let hasShortlist = false;
+
+  function showProfileView() {
+    resultsView.hidden = true;
+    profileView.hidden = false;
+    backlinkRow.hidden = !hasShortlist;
+    window.scrollTo({ top: 0 });
+  }
+
+  function showResultsView() {
+    profileView.hidden = true;
+    resultsView.hidden = false;
+    window.scrollTo({ top: 0 });
+  }
+
+  // What the shortlist was audited against, restated on the results page.
+  function profileSummary() {
+    const parts = [
+      form.elements.field_of_study.value.trim(),
+      form.elements.degree_level.value,
+      form.elements.nationality.value.trim(),
+    ].filter(Boolean);
+    const gpa = form.elements.gpa.value.trim();
+    if (gpa) parts.push("GPA " + gpa);
+    const interests = form.elements.interests.value.trim();
+    if (interests) parts.push(interests);
+    return parts.join(" · ");
+  }
+
+  editProfileBtn.addEventListener("click", showProfileView);
+  backToResultsBtn.addEventListener("click", showResultsView);
 
   // Whether Gmail drafting is configured. Checked once so the Draft button can
   // explain itself instead of failing on click.
@@ -391,7 +430,8 @@
 
     resultsEl.innerHTML = "";
     summaryEl.hidden = true;
-    idle.hidden = true;
+    profileStrip.textContent = profileSummary();
+    showResultsView();
     loading.hidden = false;
     startLoadingNarration();
     submitBtn.disabled = true;
@@ -399,6 +439,7 @@
       '<span class="btn__spinner" aria-hidden="true"></span>' +
       '<span class="btn__label">Searching…</span>';
 
+    let failed = false;
     try {
       // Send as multipart so a transcript upload rides along with the profile.
       const response = await fetch("/search", {
@@ -408,11 +449,14 @@
       const body = await response.json();
 
       if (!response.ok || !body.ok) {
+        failed = true;
         showError(body.error || "The search could not be completed.");
         return;
       }
+      hasShortlist = true;
       renderResults(body);
     } catch (err) {
+      failed = true;
       showError(
         "Could not reach the server. Check that `python app.py` is still running in your terminal."
       );
@@ -421,6 +465,8 @@
       loading.hidden = true;
       submitBtn.disabled = false;
       submitBtn.innerHTML = '<span class="btn__label">Find scholarships</span>';
+      // A failed search returns to the form so the student can fix and retry.
+      if (failed) showProfileView();
     }
   });
 

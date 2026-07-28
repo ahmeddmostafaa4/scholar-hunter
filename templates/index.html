@@ -22,160 +22,26 @@
       </div>
     </header>
 
-    <!-- Thesis -->
-    <section class="hero">
-      <div class="shell">
-        <h1 class="hero__title">
-          Find scholarships you can <em>actually</em> apply to.
-        </h1>
-        <p class="hero__tagline">
-          Scholar Hunter reads each opportunity's own page and checks every
-          stated requirement against your profile. Anything the page does not
-          say comes back as “not stated” — never a guess.
-        </p>
-        <ol class="chips" aria-label="How this works">
-          <li class="chip"><span class="chip__num">01</span> reads the source page</li>
-          <li class="chip"><span class="chip__num">02</span> checks each stated requirement</li>
-          <li class="chip"><span class="chip__num">03</span> drafts only on your click</li>
-        </ol>
-      </div>
-    </section>
-
     <main class="shell page">
-      <div class="layout">
-        <!-- Profile sheet -->
-        <section class="card form-card" aria-labelledby="form-heading">
-          <h2 id="form-heading" class="card__title">Your profile</h2>
-          <p class="card__hint">
-            We check each opportunity's own page against these details, one
-            requirement at a time.
+      <!-- ============ Page one: the profile ============ -->
+      <section id="profile-view" class="view">
+        <div class="hero">
+          <h1 class="hero__title">
+            Find scholarships you can <em>actually</em> apply to.
+          </h1>
+          <p class="hero__tagline">
+            Scholar Hunter reads each opportunity's own page and checks every
+            stated requirement against your profile. Anything the page does not
+            say comes back as “not stated” — never a guess.
           </p>
+          <ol class="chips" aria-label="How this works">
+            <li class="chip"><span class="chip__num">01</span> reads the source page</li>
+            <li class="chip"><span class="chip__num">02</span> checks each stated requirement</li>
+            <li class="chip"><span class="chip__num">03</span> drafts only on your click</li>
+          </ol>
+        </div>
 
-          <form id="profile-form" novalidate>
-            <div class="field">
-              <label for="field_of_study">Field of study <span class="req">*</span></label>
-              <input
-                id="field_of_study"
-                name="field_of_study"
-                type="text"
-                placeholder="e.g. Computer Science"
-                autocomplete="off"
-                required
-              />
-            </div>
-
-            <div class="grid">
-              <div class="field">
-                <label for="degree_level">Degree level <span class="req">*</span></label>
-                <select id="degree_level" name="degree_level" required>
-                  <option value="">Choose…</option>
-                  <option>Bachelor's</option>
-                  <option>Master's</option>
-                  <option>PhD</option>
-                </select>
-              </div>
-
-              <div class="field">
-                <label for="gpa">GPA <span class="optional">(optional)</span></label>
-                <input
-                  id="gpa"
-                  name="gpa"
-                  type="text"
-                  placeholder="e.g. 3.6/4.0"
-                  autocomplete="off"
-                />
-              </div>
-            </div>
-
-            <div class="field">
-              <label for="nationality">Country / nationality <span class="req">*</span></label>
-              <input
-                id="nationality"
-                name="nationality"
-                type="text"
-                placeholder="e.g. Egypt"
-                autocomplete="off"
-                required
-              />
-            </div>
-
-            <div class="field">
-              <label for="interests">Interests or funding goal</label>
-              <input
-                id="interests"
-                name="interests"
-                type="text"
-                placeholder="e.g. ML funding in Germany"
-                autocomplete="off"
-              />
-            </div>
-
-            <!-- Courses: paste or upload -->
-            <fieldset class="field courses">
-              <legend>
-                Undergraduate courses <span class="optional">(optional)</span>
-              </legend>
-              <p class="card__hint courses__hint">
-                When a programme lists prerequisites we match them against your
-                courses by <strong>content</strong>, not by title. Descriptions
-                help most.
-              </p>
-
-              <div class="tabs" role="tablist" aria-label="How to provide courses">
-                <button
-                  type="button"
-                  class="tab is-active"
-                  role="tab"
-                  aria-selected="true"
-                  aria-controls="panel-paste"
-                  data-tab="paste"
-                >
-                  Paste courses
-                </button>
-                <button
-                  type="button"
-                  class="tab"
-                  role="tab"
-                  aria-selected="false"
-                  aria-controls="panel-upload"
-                  data-tab="upload"
-                >
-                  Upload file
-                </button>
-              </div>
-
-              <div id="panel-paste" class="tab-panel is-active" role="tabpanel">
-                <textarea
-                  id="courses"
-                  name="courses"
-                  rows="4"
-                  placeholder="One per line, e.g.&#10;Intro to AI: search, knowledge representation, machine learning&#10;Linear Algebra: vector spaces, matrices, eigenvalues"
-                ></textarea>
-              </div>
-
-              <div id="panel-upload" class="tab-panel" role="tabpanel">
-                <input
-                  id="courses_file"
-                  name="courses_file"
-                  type="file"
-                  accept=".txt,.csv,.pdf"
-                  class="file-input"
-                />
-                <p class="card__hint">
-                  A transcript or course list as <code>.txt</code>,
-                  <code>.csv</code> or <code>.pdf</code> (max 5&nbsp;MB).
-                </p>
-              </div>
-            </fieldset>
-
-            <button type="submit" class="btn btn--primary btn--block" id="submit-btn">
-              <span class="btn__label">Find scholarships</span>
-            </button>
-          </form>
-        </section>
-
-        <!-- Results column -->
-        <section class="results-col" id="results-area" aria-live="polite">
+        <div class="form-wrap">
           <!-- Error banner -->
           <div
             id="error-banner"
@@ -190,34 +56,176 @@
             </div>
           </div>
 
-          <!-- Before the first search -->
-          <div id="idle" class="idle">
-            <p class="idle__kicker">Shortlist</p>
-            <h3 class="idle__title">Your audited shortlist will appear here.</h3>
-            <p class="idle__text">
-              Every result cites the page it came from, and every stated
-              requirement arrives stamped. Fill in the profile to start.
-            </p>
-            <p class="idle__stamps" aria-hidden="true">
-              <span class="stamp stamp--met">✓ met</span>
-              <span class="stamp stamp--not_met">✕ not met</span>
-              <span class="stamp stamp--not_stated">– not stated</span>
-            </p>
-          </div>
+          <!-- Returns to an existing shortlist without re-searching -->
+          <p class="backlink-row" id="backlink-row" hidden>
+            <button type="button" class="linkish" id="back-to-results">
+              View current shortlist →
+            </button>
+          </p>
 
-          <div id="loading" class="loading" hidden>
-            <div class="scan" aria-hidden="true"><div class="scan__bar"></div></div>
-            <p class="loading__text" id="loading-text">Searching trusted sources…</p>
-            <p class="loading__sub">
-              Reading each opportunity's page and checking it against your
-              profile. This usually takes under a minute.
+          <section class="card form-card" aria-labelledby="form-heading">
+            <h2 id="form-heading" class="card__title">Your profile</h2>
+            <p class="card__hint">
+              We check each opportunity's own page against these details, one
+              requirement at a time.
             </p>
-          </div>
 
-          <div id="results-summary" class="results-summary" hidden></div>
-          <div id="results" class="results"></div>
-        </section>
-      </div>
+            <form id="profile-form" novalidate>
+              <div class="grid">
+                <div class="field">
+                  <label for="field_of_study">Field of study <span class="req">*</span></label>
+                  <input
+                    id="field_of_study"
+                    name="field_of_study"
+                    type="text"
+                    placeholder="e.g. Computer Science"
+                    autocomplete="off"
+                    required
+                  />
+                </div>
+
+                <div class="field">
+                  <label for="degree_level">Degree level <span class="req">*</span></label>
+                  <select id="degree_level" name="degree_level" required>
+                    <option value="">Choose…</option>
+                    <option>Bachelor's</option>
+                    <option>Master's</option>
+                    <option>PhD</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid">
+                <div class="field">
+                  <label for="nationality">Country / nationality <span class="req">*</span></label>
+                  <input
+                    id="nationality"
+                    name="nationality"
+                    type="text"
+                    placeholder="e.g. Egypt"
+                    autocomplete="off"
+                    required
+                  />
+                </div>
+
+                <div class="field">
+                  <label for="gpa">GPA <span class="optional">(optional)</span></label>
+                  <input
+                    id="gpa"
+                    name="gpa"
+                    type="text"
+                    placeholder="e.g. 3.6/4.0"
+                    autocomplete="off"
+                  />
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="interests">Interests or funding goal</label>
+                <input
+                  id="interests"
+                  name="interests"
+                  type="text"
+                  placeholder="e.g. ML funding in Germany"
+                  autocomplete="off"
+                />
+              </div>
+
+              <!-- Courses: paste or upload -->
+              <fieldset class="field courses">
+                <legend>
+                  Undergraduate courses <span class="optional">(optional)</span>
+                </legend>
+                <p class="card__hint courses__hint">
+                  When a programme lists prerequisites we match them against your
+                  courses by <strong>content</strong>, not by title. Descriptions
+                  help most.
+                </p>
+
+                <div class="tabs" role="tablist" aria-label="How to provide courses">
+                  <button
+                    type="button"
+                    class="tab is-active"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="panel-paste"
+                    data-tab="paste"
+                  >
+                    Paste courses
+                  </button>
+                  <button
+                    type="button"
+                    class="tab"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="panel-upload"
+                    data-tab="upload"
+                  >
+                    Upload file
+                  </button>
+                </div>
+
+                <div id="panel-paste" class="tab-panel is-active" role="tabpanel">
+                  <textarea
+                    id="courses"
+                    name="courses"
+                    rows="4"
+                    placeholder="One per line, e.g.&#10;Intro to AI: search, knowledge representation, machine learning&#10;Linear Algebra: vector spaces, matrices, eigenvalues"
+                  ></textarea>
+                </div>
+
+                <div id="panel-upload" class="tab-panel" role="tabpanel">
+                  <input
+                    id="courses_file"
+                    name="courses_file"
+                    type="file"
+                    accept=".txt,.csv,.pdf"
+                    class="file-input"
+                  />
+                  <p class="card__hint">
+                    A transcript or course list as <code>.txt</code>,
+                    <code>.csv</code> or <code>.pdf</code> (max 5&nbsp;MB).
+                  </p>
+                </div>
+              </fieldset>
+
+              <button type="submit" class="btn btn--primary btn--block" id="submit-btn">
+                <span class="btn__label">Find scholarships</span>
+              </button>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <!-- ============ Page two: the shortlist ============ -->
+      <section id="results-view" class="view sheet" aria-live="polite" hidden>
+        <div class="audit-strip">
+          <div class="audit-strip__body">
+            <span class="audit-strip__label">Profile</span>
+            <span class="audit-strip__text" id="profile-strip"></span>
+          </div>
+          <button type="button" class="btn btn--outline" id="edit-profile">
+            Edit profile
+          </button>
+        </div>
+
+        <div id="loading" class="loading" hidden>
+          <div class="scan" aria-hidden="true"><div class="scan__bar"></div></div>
+          <p class="loading__text" id="loading-text">Searching trusted sources…</p>
+          <p class="loading__sub">
+            Reading each opportunity's page and checking it against your
+            profile. This usually takes under a minute.
+          </p>
+          <p class="loading__stamps" aria-hidden="true">
+            <span class="stamp stamp--met">✓ met</span>
+            <span class="stamp stamp--not_met">✕ not met</span>
+            <span class="stamp stamp--not_stated">– not stated</span>
+          </p>
+        </div>
+
+        <div id="results-summary" class="results-summary" hidden></div>
+        <div id="results" class="results"></div>
+      </section>
     </main>
 
     <footer class="footer">

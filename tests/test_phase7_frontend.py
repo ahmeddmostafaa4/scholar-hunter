@@ -210,6 +210,25 @@ def test_summary_reports_what_was_skipped(page):
     assert "directory" in summary
 
 
+def test_results_are_their_own_page_and_edit_returns(page):
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+
+    # The form gave way to the shortlist page, which restates the profile.
+    assert not page.is_visible("#profile-form")
+    assert "Computer Science" in page.inner_text(".audit-strip")
+
+    # Editing returns to the form with everything still filled in.
+    page.click("#edit-profile")
+    assert page.is_visible("#profile-form")
+    assert page.input_value("#field_of_study") == "Computer Science"
+
+    # And the existing shortlist is one click away, without a re-search.
+    page.click("#back-to-results")
+    assert page.is_visible(".result")
+
+
 # --- card actions ----------------------------------------------------------
 
 
