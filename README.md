@@ -96,7 +96,9 @@ Open the project folder in VS Code, open the integrated terminal, and:
 python app.py
 ```
 
-Then open the URL it prints — normally <http://localhost:5000>.
+**Your browser opens automatically** at the right address. If it does not, open
+the URL printed in the terminal — normally <http://localhost:5050> on macOS,
+<http://localhost:5000> elsewhere. Set `NO_BROWSER=1` to stop it opening.
 
 This is a **local dev server**. Nothing is deployed anywhere.
 
@@ -242,7 +244,7 @@ pip install playwright && playwright install chromium
 
 | Symptom | Cause and fix |
 |---|---|
-| `403 Forbidden` at `localhost:5000` | macOS AirPlay Receiver holds that port — use the port the app prints (5050), or turn AirPlay Receiver off |
+| Blank page / `403` at `localhost:5000` | macOS AirPlay Receiver holds that port and serves an empty 403, which looks like the app is down. Use the port the app prints (5050) — it now opens the browser for you — or turn AirPlay Receiver off |
 | "ANTHROPIC_API_KEY is not set" | Copy `.env.example` to `.env` and fill it in |
 | "Email drafting is not configured" | Expected without `credentials.json` — everything else still works |
 | Google blocks the OAuth login | Add your own email as a **Test user** on the OAuth consent screen |

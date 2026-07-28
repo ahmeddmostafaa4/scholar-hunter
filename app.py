@@ -288,8 +288,18 @@ if __name__ == "__main__":
     print("=" * 62)
     if note:
         print(note)
-    print(f"  Open http://localhost:{port} in your browser")
+    url = f"http://localhost:{port}"
+    print(f"  Open {url} in your browser")
     print("  (local dev server — nothing is deployed anywhere)")
     print("=" * 62 + "\n")
+
+    # Open the right URL automatically. Typing localhost:5000 out of habit lands
+    # on AirPlay's blank 403, which reads as "the app is broken" — so don't make
+    # anyone type it. Set NO_BROWSER=1 to skip.
+    if not (os.environ.get("NO_BROWSER") or "").strip():
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     app.run(host="127.0.0.1", port=port, debug=True, use_reloader=False)
