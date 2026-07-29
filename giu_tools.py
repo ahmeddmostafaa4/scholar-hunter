@@ -63,6 +63,23 @@ def credentials() -> tuple[str, str]:
     )
 
 
+def site() -> str:
+    """Which university to talk to: "giu" or "guc".
+
+    Both packages support either — GUC and GIU run the same CMS and portal
+    software, differing only in host and a couple of paths. They default to GUC,
+    so a GIU student's login was being sent to cms.guc.edu.eg and rejected with
+    a 401. Set GIU_SITE to override; otherwise infer it from the username, since
+    a GIU login is normally an @giu-uni.de address.
+    """
+    explicit = (os.getenv("GIU_SITE") or "").strip().lower()
+    if explicit in {"giu", "guc"}:
+        return explicit
+
+    username, _ = credentials()
+    return "guc" if "guc.edu.eg" in username.lower() else "giu"
+
+
 def availability() -> dict:
     """What the GIU integration can currently do — used by the startup banner."""
     username, password = credentials()
@@ -117,7 +134,7 @@ def fetch_transcript(year_value: str = "") -> dict:
 
     username, password = credentials()
     try:
-        portal = GucPortal(username, password)
+        portal = GucPortal(username, password, site=site())
         if not year_value:
             years = portal.available_years()
             if not years:
@@ -185,7 +202,7 @@ def fetch_cms_courses() -> dict:
 
     username, password = credentials()
     try:
-        courses = GucCms(username, password).list_courses()
+        courses = GucCms(username, password, site=site()).list_courses()
     except Exception as exc:
         return {"ok": False, "available": True, "error": f"Could not read the CMS: {exc}"}
 
