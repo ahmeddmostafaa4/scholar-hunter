@@ -141,6 +141,28 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
   2.0.10's helper misspells its own parameter and unpacks a class that does not
   exist, so it raises on every path.
 
+### Application pack (portal applications)
+
+- `application_pack.py` merges the student's **own** files into one PDF in the
+  programme's document order, with a contents cover sheet. PDFs pass through;
+  images (phone photos of transcripts) are converted to A4 pages. Anything it
+  cannot merge is **reported**, never dropped silently.
+- `POST /application_pack` returns the PDF as a download; the readiness summary
+  rides in `X-Pack-*` headers.
+- Extraction now also yields `application_url` / `application_method`. The URL is
+  **scraped from the page's own anchors** and the model may only pick from that
+  list — `_verified_apply_url` rejects anything not actually on the page, because
+  sending a student to a hallucinated portal is worse than sending them nowhere.
+- **Scope was deliberately limited.** The original request was for the agent to
+  generate the documents and submit them. It generates nothing (a motivation
+  letter must be the applicant's own words; transcripts and reference letters are
+  issued by third parties — generating them is forgery, and submitting an
+  AI-written letter is misconduct that disqualifies applicants) and submits
+  nothing (the truthfulness declaration is the student's to make, and
+  submissions are irreversible). Tests assert both boundaries by inspecting the
+  module for model calls and outbound HTTP.
+- Upload cap raised 5 MB -> 40 MB: a pack is several scans at once.
+
 ## Known issues / next steps
 
 - Playwright is a **dev-only** extra for the Phase 7 browser tests; those tests skip themselves when it is absent, and it is left commented out in `requirements.txt`.

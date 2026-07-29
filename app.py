@@ -21,12 +21,15 @@ from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
 import agent
+import application_pack as pack_builder
 
 app = Flask(__name__)
 CORS(app)  # so the page can call the API from localhost without friction
 
-# Reject oversized uploads before reading them into memory.
-app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB
+# Reject oversized uploads before reading them into memory. An application pack
+# is several scanned documents at once, so this has to be roomier than the
+# single transcript the course upload takes.
+app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024  # 40 MB
 
 ALLOWED_UPLOADS = {".txt", ".csv", ".pdf"}
 
@@ -210,6 +213,69 @@ def document_help():
     return jsonify(outcome)
 
 
+@app.post("/application_pack")
+def application_pack():
+    """Merge the student's own documents into one ordered PDF for a portal.
+
+    Deliberately does not generate any document and does not submit anything:
+    the pack comes back to the student, who reviews it and submits it themselves.
+    """
+    import json as _json
+
+    if not (request.content_type or "").startswith("multipart/form-data"):
+        return fail("Attach your documents as a multipart form.")
+
+    try:
+        documents = _json.loads(request.form.get("documents") or "[]")
+    except ValueError:
+        return fail("Could not read the document list.")
+    if not isinstance(documents, list) or not documents:
+        return fail("No required documents were supplied to order the pack by.")
+
+    # One file input per required document, in the programme's own order, so the
+    # pack is assembled correctly without anyone having to guess which is which.
+    entries, attached_labels = [], []
+    for index, label in enumerate(documents):
+        upload = request.files.get(f"doc_{index}")
+        if not upload or not upload.filename:
+            continue
+        entries.append(
+            {"label": str(label), "filename": upload.filename, "data": upload.read()}
+        )
+        attached_labels.append(str(label))
+
+    if not entries:
+        return fail("Attach at least one document before building the pack.")
+
+    try:
+        result = pack_builder.build_pack(
+            entries,
+            opportunity=(request.form.get("opportunity") or "").strip(),
+            institution=(request.form.get("institution") or "").strip(),
+        )
+    except Exception as exc:
+        app.logger.exception("pack build failed")
+        return fail(f"Could not build the pack: {exc}", 500)
+
+    if not result["ok"]:
+        return fail(result["error"], 400, skipped=result.get("skipped", []))
+
+    ready = pack_builder.readiness(documents, attached_labels)
+    filename = "application-pack.pdf"
+
+    response = app.response_class(result["pdf"], mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    # Summary rides in headers so the browser can report it beside the download.
+    response.headers["X-Pack-Pages"] = str(result["pages"])
+    response.headers["X-Pack-Included"] = str(len(result["included"]))
+    response.headers["X-Pack-Skipped"] = _json.dumps(result["skipped"])[:1800]
+    response.headers["X-Pack-Missing"] = _json.dumps(ready["missing"])[:1800]
+    response.headers["Access-Control-Expose-Headers"] = (
+        "X-Pack-Pages, X-Pack-Included, X-Pack-Skipped, X-Pack-Missing"
+    )
+    return response
+
+
 @app.post("/draft_email")
 def draft_email():
     """Create a Gmail DRAFT for a chosen opportunity. Never sends."""
@@ -275,7 +341,7 @@ def not_found(_error):
 
 @app.errorhandler(413)
 def too_large(_error):
-    return fail("That file is too large. The limit is 5 MB.", 413)
+    return fail("Those files are too large. The limit is 40 MB in total.", 413)
 
 
 @app.errorhandler(500)

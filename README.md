@@ -140,8 +140,28 @@ eligibility badge, deadline and source. Click **View more** to open one up:
 6. **How to prepare these** — per-document steps tailored to this opportunity
    and to you: what it must achieve, concrete actions, and the mistake that
    most often costs applicants
-7. **Deadline & funding** — deadlines under 30 days away are tinted amber
-8. **Source** — the URL it came from
+7. **Where to apply** — the real application portal link, taken from the page
+8. **Deadline & funding** — deadlines under 30 days away are tinted amber
+9. **Source** — the URL it came from
+
+### Building an application pack
+
+Most programmes take applications through a web portal, not email, and most want
+**one combined PDF**. Under "Documents to submit" each required document gets its
+own attach button. Attach the files **you already have**, click **Build combined
+PDF**, and you get back a single ordered PDF with a contents sheet — then open
+the portal and submit it yourself.
+
+It tells you what is missing and what it could not merge (a `.docx`, a
+password-protected PDF), because finding a gap after submitting is the failure
+this exists to prevent.
+
+**What it deliberately will not do.** It does not write your documents, and it
+does not submit for you. A motivation letter has to be your own words; a
+transcript or a reference letter is issued by someone else — generating either
+is forgery, and submitting an AI-written letter as your own is academic
+misconduct that gets applicants disqualified and banned. The declaration that an
+application is truthful is yours to make, so the pack comes back to you.
 
 The document guidance is generated **only when you expand a card**, so a
 shortlist you merely skim costs nothing extra.
@@ -173,6 +193,7 @@ deadlines.json      created at runtime
 | `GET` | `/health` | what is configured (the page uses it to explain a disabled button) |
 | `POST` | `/search` | profile in, ranked uniform shortlist out |
 | `POST` | `/document_help` | explains how to prepare a card's required documents |
+| `POST` | `/application_pack` | merges the student's own files into one ordered PDF |
 | `POST` | `/draft_email` | creates a Gmail **draft** |
 | `POST` | `/save_deadline` | appends to `deadlines.json` |
 

@@ -206,20 +206,61 @@
 
   /* Documents the application asks for. Rendered as a stamped checklist so it
      reads like the rest of the audit rather than a bare bullet list. */
+  /* Each required document gets its own file input, in the programme's order.
+     Attaching per requirement means the pack is assembled correctly without
+     anyone having to guess which uploaded file is which. */
   function renderDocuments(documents) {
     if (!documents || !documents.length) {
       return '<p class="muted-note">This page does not list the documents required — check the opportunity\'s own application page before applying.</p>';
     }
     const items = documents
       .map(
-        (doc) => `
+        (doc, i) => `
         <li>
           <span class="docs__mark" aria-hidden="true">▢</span>
-          <span class="docs__name">${escapeHtml(doc)}</span>
+          <div class="docs__body">
+            <span class="docs__name">${escapeHtml(doc)}</span>
+            <label class="docs__attach">
+              <input type="file" data-doc-index="${i}"
+                     accept=".pdf,.jpg,.jpeg,.png,.webp,.tif,.tiff">
+              <span class="docs__attach-label">Attach your file</span>
+            </label>
+          </div>
         </li>`
       )
       .join("");
-    return `<ul class="docs">${items}</ul>`;
+
+    return `
+      <ul class="docs">${items}</ul>
+      <div class="pack">
+        <p class="pack__note">Your own documents only. Scholar Hunter never writes a
+        motivation letter, transcript or reference for you, and never submits on your
+        behalf — it orders your files into one PDF for the portal.</p>
+        <div class="pack__row">
+          <button type="button" class="btn btn--outline" data-action="pack" disabled>
+            <span class="btn__label">Build combined PDF</span>
+          </button>
+          <span class="pack__count" data-pack-count>0 of ${documents.length} attached</span>
+        </div>
+        <div class="pack__result" data-pack-result></div>
+      </div>`;
+  }
+
+  /* Where the student actually applies. The URL is only ever one the page really
+     carried, so this never sends anyone to an invented portal. */
+  function renderApply(item) {
+    const method = isStated(item.application_method)
+      ? escapeHtml(item.application_method)
+      : "";
+    if (!isStated(item.application_url)) {
+      return `<p class="muted-note">No application link was found on this page${
+        method ? ` &mdash; it says applications go by ${method}` : ""
+      }. Open the source above to find where to apply.</p>`;
+    }
+    return `
+      <a class="btn btn--solid" href="${escapeHtml(item.application_url)}"
+         target="_blank" rel="noopener noreferrer">Open application portal \u2197</a>
+      <p class="apply__url">${escapeHtml(item.application_url)}</p>`;
   }
 
   function renderGuidance(guidance) {
@@ -362,6 +403,11 @@
         </div>
 
         <div class="result__section">
+          <span class="result__label">Where to apply</span>
+          <div class="apply">${renderApply(item)}</div>
+        </div>
+
+        <div class="result__section">
           <span class="result__label">Funding</span>
           <ul class="ledger facts">
             <li>
@@ -392,6 +438,26 @@
         </button>
       </div>`;
 
+    // Attaching documents: enable the build button and keep a running count.
+    const packBtn = card.querySelector('[data-action="pack"]');
+    if (packBtn) {
+      const inputs = Array.from(card.querySelectorAll("input[data-doc-index]"));
+      const countEl = card.querySelector("[data-pack-count]");
+      const refresh = () => {
+        const attached = inputs.filter((i) => i.files && i.files.length).length;
+        countEl.textContent = `${attached} of ${inputs.length} attached`;
+        packBtn.disabled = attached === 0;
+        inputs.forEach((input) => {
+          const label = input.parentElement.querySelector(".docs__attach-label");
+          const file = input.files && input.files[0];
+          label.textContent = file ? file.name : "Attach your file";
+          input.closest("li").classList.toggle("is-attached", Boolean(file));
+        });
+      };
+      inputs.forEach((input) => input.addEventListener("change", refresh));
+      packBtn.addEventListener("click", () => buildPack(card, item, inputs, packBtn));
+    }
+
     // Expand / collapse. Document guidance loads the first time it opens.
     const toggle = card.querySelector(".toggle");
     const details = card.querySelector(".result__details");
@@ -418,6 +484,90 @@
     }
 
     return card;
+  }
+
+  /* Send the student's own files to be merged, then hand the PDF straight back
+     as a download. Nothing is stored and nothing is submitted — the student
+     reviews the pack and uploads it to the portal themselves. */
+  async function buildPack(card, item, inputs, button) {
+    const resultEl = card.querySelector("[data-pack-result]");
+    const original = button.querySelector(".btn__label").textContent;
+    button.disabled = true;
+    button.innerHTML =
+      '<span class="btn__spinner" aria-hidden="true"></span>' +
+      '<span class="btn__label">Building…</span>';
+    resultEl.innerHTML = "";
+
+    const data = new FormData();
+    data.append("documents", JSON.stringify(item.documents || []));
+    data.append("opportunity", item.name || "");
+    data.append("institution", item.institution || "");
+    inputs.forEach((input) => {
+      if (input.files && input.files[0]) {
+        data.append(`doc_${input.dataset.docIndex}`, input.files[0]);
+      }
+    });
+
+    try {
+      const response = await fetch("/application_pack", { method: "POST", body: data });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        resultEl.innerHTML = `<p class="pack__error">${escapeHtml(
+          body.error || "The pack could not be built."
+        )}</p>`;
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "application-pack.pdf";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+
+      const pages = response.headers.get("X-Pack-Pages") || "?";
+      const included = response.headers.get("X-Pack-Included") || "?";
+      let skipped = [], missing = [];
+      try { skipped = JSON.parse(response.headers.get("X-Pack-Skipped") || "[]"); } catch (e) {}
+      try { missing = JSON.parse(response.headers.get("X-Pack-Missing") || "[]"); } catch (e) {}
+
+      let html = `<p class="pack__ok">&#10003; Combined PDF downloaded &mdash; ${escapeHtml(
+        included
+      )} document(s), ${escapeHtml(pages)} pages.</p>`;
+
+      // Say what is not in the pack. Discovering a gap after submitting is the
+      // failure this feature exists to prevent.
+      if (skipped.length) {
+        html += `<p class="pack__warn"><strong>Left out:</strong> ${skipped
+          .map((s) => `${escapeHtml(s.filename)} &mdash; ${escapeHtml(s.why)}`)
+          .join("; ")}</p>`;
+      }
+      if (missing.length) {
+        // Requirement names run long, so show a count and shortened titles
+        // rather than eight full sentences of small amber text.
+        const shown = missing
+          .slice(0, 4)
+          .map((m) => escapeHtml(m.length > 58 ? m.slice(0, 58).trimEnd() + "…" : m))
+          .map((m) => `<li>${m}</li>`)
+          .join("");
+        const more = missing.length > 4 ? `<li>and ${missing.length - 4} more</li>` : "";
+        html += `<div class="pack__warn"><strong>Still missing ${missing.length} of ${
+          (item.documents || []).length
+        }:</strong><ul class="pack__missing">${shown}${more}</ul></div>`;
+      }
+      html += '<p class="pack__note">Review it before you upload it to the portal.</p>';
+      resultEl.innerHTML = html;
+    } catch (err) {
+      resultEl.innerHTML =
+        '<p class="pack__error">Could not reach the server to build the pack.</p>';
+    } finally {
+      button.disabled = false;
+      button.innerHTML = `<span class="btn__label">${escapeHtml(original)}</span>`;
+    }
   }
 
   // --- card actions ------------------------------------------------------

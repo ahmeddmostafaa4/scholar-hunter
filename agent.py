@@ -503,10 +503,65 @@ def fetch_page_text(url: str, max_chars: int = PAGE_FETCH_CHARS) -> dict:
         return {"ok": False, "error": f"Could not fetch {url}: {exc}", "text": ""}
 
     soup = BeautifulSoup(response.text, "html.parser")
+
+    # Collect real "apply here" links from the page's own anchors before the
+    # markup is thrown away. Taking the URL from the page means it can never be
+    # invented — the model only ever picks from what is actually there.
+    apply_links = _apply_links(soup, url)
+
     for noise in soup(["script", "style", "nav", "footer", "header", "form", "noscript"]):
         noise.decompose()
     text = re.sub(r"\n{3,}", "\n\n", soup.get_text("\n", strip=True))
-    return {"ok": True, "text": text[:max_chars], "truncated": len(text) > max_chars}
+    return {
+        "ok": True,
+        "text": text[:max_chars],
+        "truncated": len(text) > max_chars,
+        "apply_links": apply_links,
+    }
+
+
+# Words that mark a link as the place you actually apply, rather than more prose.
+_APPLY_WORDS = (
+    "apply", "application", "portal", "register", "submit", "bewerbung",
+    "online-bewerbung", "how to apply", "start your application",
+)
+
+
+def _apply_links(soup, page_url: str, limit: int = 8) -> list[dict]:
+    """Anchors on the page that look like the actual application entry point."""
+    from urllib.parse import urljoin
+
+    found: dict[str, str] = {}
+    for anchor in soup.find_all("a", href=True):
+        label = " ".join(anchor.get_text(" ", strip=True).split())[:120]
+        href = anchor["href"].strip()
+        if not href or href.startswith(("#", "mailto:", "javascript:")):
+            continue
+
+        haystack = f"{label} {href}".lower()
+        if not any(word in haystack for word in _APPLY_WORDS):
+            continue
+
+        absolute = urljoin(page_url, href)
+        if absolute.startswith("http") and absolute not in found:
+            found[absolute] = label or absolute
+        if len(found) >= limit:
+            break
+    return [{"label": text, "url": link} for link, text in found.items()]
+
+
+def _verified_apply_url(candidate, apply_links: list[dict]) -> str:
+    """Accept an application URL only if the page actually carried it.
+
+    Sending a student to a hallucinated application portal is worse than sending
+    them nowhere, so the model's answer is checked against the anchors we
+    scraped rather than trusted.
+    """
+    candidate = str(candidate or "").strip()
+    if not candidate or candidate == NOT_STATED:
+        return NOT_STATED
+    real = {link["url"] for link in apply_links}
+    return candidate if candidate in real else NOT_STATED
 
 
 def extract_requirements_from(source: str, page_text: str = "") -> dict:
@@ -522,11 +577,13 @@ def extract_requirements_from(source: str, page_text: str = "") -> dict:
     url = source if source.lower().startswith("http") else ""
     text = page_text
     fetch_note = ""
+    apply_links: list[dict] = []
 
     if url and not text:
         fetched = fetch_page_text(url)
         if fetched["ok"]:
             text = fetched["text"]
+            apply_links = fetched.get("apply_links", [])
         else:
             fetch_note = fetched["error"]
     if not text:
@@ -547,7 +604,8 @@ def extract_requirements_from(source: str, page_text: str = "") -> dict:
 Return ONLY a JSON object with exactly these keys:
   minimum_gpa, degree_level, eligible_nationalities, language_requirement,
   field_of_study, deadline, funding_scope, required_courses, required_documents,
-  opportunity_name, opportunity_type, institution, is_single_opportunity
+  opportunity_name, opportunity_type, institution, is_single_opportunity,
+  application_url, application_method
 
 FIRST decide "is_single_opportunity" (true/false):
 - true  = this page describes ONE specific named opportunity a student can apply to.
@@ -564,6 +622,12 @@ Rules — these matter more than completeness:
 - If the text does not state a field, set it to exactly "{NOT_STATED}".
 - "required_courses" is a LIST of prerequisite/required course names the applicant
   must already have studied. Use [] if the text names none.
+- "application_url" is the link where the applicant actually APPLIES — an online
+  portal, an application form, a "apply now" link. It is often different from the
+  page you are reading, which usually just describes the award. Give the full URL
+  if the text contains one, otherwise "{NOT_STATED}". Never invent a URL.
+- "application_method" is one of: "online portal", "email", "postal", or
+  "{NOT_STATED}" — how the application is actually submitted, if the page says.
 - "required_documents" is a LIST of documents the applicant must SUBMIT with the
   application (e.g. "Motivation letter (max 2 pages)", "CV in Europass format",
   "Two academic letters of recommendation", "Certified transcript of records",
@@ -574,6 +638,12 @@ Rules — these matter more than completeness:
   "workshop", "grant", or "{NOT_STATED}".
 - "deadline" should be the application deadline as written (e.g. "15 January 2026").
 - "funding_scope" is what the money covers (e.g. "full tuition + 992 EUR/month stipend").
+
+LINKS FOUND ON THIS PAGE THAT MAY BE THE APPLICATION ENTRY POINT:
+{json.dumps(apply_links, indent=2, ensure_ascii=False) if apply_links else "(none found)"}
+For "application_url", choose the most likely one from THIS LIST, copied exactly.
+If none of them is the place you apply, use "{NOT_STATED}". Do not write a URL
+that is not in the list.
 
 TEXT:
 \"\"\"
@@ -600,6 +670,10 @@ TEXT:
         # Default to False: if the model did not confirm this is one specific
         # opportunity, treat it as a listing rather than assume it is applicable.
         "is_single_opportunity": parsed.get("is_single_opportunity") is True,
+        # Only honour an application URL that really appeared on the page.
+        "application_url": _verified_apply_url(parsed.get("application_url"), apply_links),
+        "application_method": parsed.get("application_method", NOT_STATED),
+        "apply_links": apply_links,
         "requirements": requirements,
         "note": parsed.get("error", fetch_note),
         "model_error": parsed.get("model_error", False),
@@ -1626,6 +1700,9 @@ def _assess_one(result: dict, profile: dict, courses: list) -> dict | None:
         # 5. Documents the application requires (guidance is fetched on demand,
         #    when the student expands the card)
         "documents": _as_list(requirements.get("required_documents", [])),
+        # Where the student actually applies — verified to exist on the page.
+        "application_url": extracted.get("application_url", NOT_STATED),
+        "application_method": extracted.get("application_method", NOT_STATED),
         # 6. Deadline & funding
         "deadline": str(requirements.get("deadline", NOT_STATED)),
         "deadline_status": eligibility.get("deadline_status", NOT_STATED),

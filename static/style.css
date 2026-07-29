@@ -949,3 +949,80 @@ textarea { resize: vertical; min-height: 92px; font-size: 0.9375rem; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* --- Documents: attach your own, per requirement ------------------------- */
+
+.docs li.is-attached .docs__mark { color: var(--green); }
+.docs li.is-attached .docs__mark::before { content: "\2611"; }
+.docs li.is-attached .docs__mark { font-size: 0; }
+.docs li.is-attached .docs__mark::before { font-size: 0.875rem; }
+
+.docs__body { display: grid; gap: 3px; }
+
+.docs__attach { display: inline-flex; align-items: center; cursor: pointer; }
+.docs__attach input[type="file"] { position: absolute; width: 1px; height: 1px;
+  opacity: 0; pointer-events: none; }
+
+.docs__attach-label {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--cobalt-deep);
+  border: 1px dashed #c8d2f7;
+  border-radius: 4px;
+  padding: 2px 8px;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.docs__attach:hover .docs__attach-label { background: var(--cobalt-wash); border-color: var(--cobalt); }
+.docs__attach input:focus-visible + .docs__attach-label { outline: 2px solid var(--cobalt); outline-offset: 2px; }
+.docs li.is-attached .docs__attach-label { border-style: solid; border-color: #b5dcc8;
+  background: var(--green-wash); color: var(--green); }
+
+/* --- The combined pack --------------------------------------------------- */
+
+.pack { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+
+.pack__note { margin: 0 0 10px; font-size: 0.75rem; line-height: 1.45; color: var(--ink-faint); }
+
+.pack__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.pack__count { font-family: var(--mono); font-size: 0.6875rem; color: var(--ink-faint);
+  letter-spacing: 0.04em; }
+
+.pack__result { margin-top: 10px; display: grid; gap: 6px; }
+
+.pack__ok { margin: 0; font-size: 0.8125rem; font-weight: 600; color: var(--green); }
+
+.pack__warn {
+  margin: 0; font-size: 0.75rem; line-height: 1.45; color: var(--amber);
+  background: var(--amber-wash); border: 1px solid #ecd9ae;
+  border-radius: 6px; padding: 7px 10px;
+}
+
+.pack__error {
+  margin: 0; font-size: 0.8125rem; color: var(--red);
+  background: var(--red-wash); border: 1px solid #f3c4c1;
+  border-radius: 6px; padding: 7px 10px;
+}
+
+/* --- Where to apply ------------------------------------------------------ */
+
+.apply { display: grid; gap: 7px; justify-items: start; }
+
+.btn--solid {
+  background: var(--cobalt); color: #fff; border-color: var(--cobalt);
+  text-decoration: none; padding: 9px 16px; font-size: 0.8125rem;
+}
+.btn--solid:hover { background: var(--cobalt-deep); border-color: var(--cobalt-deep);
+  transform: translateY(-1px); box-shadow: 0 4px 12px rgba(27, 63, 211, 0.26); }
+
+.apply__url { margin: 0; font-family: var(--mono); font-size: 0.6875rem;
+  color: var(--ink-faint); word-break: break-all; }
+
+.pack__missing { margin: 5px 0 0; padding-left: 16px; display: grid; gap: 2px; }
+.pack__missing li { font-size: 0.7188rem; line-height: 1.4; }
