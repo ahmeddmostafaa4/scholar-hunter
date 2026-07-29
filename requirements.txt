@@ -4,6 +4,11 @@ langchain>=0.3,<0.4
 langchain-community>=0.3,<0.4
 langchain-anthropic>=0.3,<0.4
 
+# Talks to the iHQ LiteLLM proxy, which is OpenAI-compatible. Must stay on the
+# 0.3 line: langchain-openai 1.x pulls langchain-core 1.x and breaks everything
+# else pinned above.
+langchain-openai>=0.2,<0.4
+
 # Web server (local only)
 flask>=3.0
 flask-cors>=4.0

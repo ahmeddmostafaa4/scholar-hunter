@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
@@ -32,7 +33,19 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 # The Claude model, kept as a constant so it is a one-line change.
-MODEL_NAME = "claude-sonnet-4-6"
+#
+# Routed through the iHQ LiteLLM proxy, so model ids carry a provider prefix
+# ("anthropic/..."). Ask the proxy for the full list with:
+#     curl https://litellm.i-hq.tech/v1/models -H "Authorization: Bearer $LITELLM_API_KEY"
+#
+# Budget note: keys carry a $3 lifetime cap. A full search is ~25 model calls;
+# on sonnet-4-6 that is roughly $0.40, on claude-haiku-4-5 roughly $0.14. Switch
+# this constant to "anthropic/claude-haiku-4-5" to make the budget stretch about
+# three times further, at some cost to the eligibility reasoning.
+MODEL_NAME = "anthropic/claude-sonnet-4-6"
+
+# The OpenAI-compatible endpoint in front of the models.
+LITELLM_BASE_URL = "https://litellm.i-hq.tech/v1"
 
 # Keep responses roomy enough for a full shortlist without risking a timeout.
 MAX_TOKENS = 8000
@@ -99,24 +112,71 @@ def _require_key(name: str, where: str) -> str:
     return value
 
 
+def llm_key() -> tuple[str, bool]:
+    """Return (key, use_proxy) for whichever credential is configured.
+
+    Two setups are supported, because the same project is run both ways:
+      * an iHQ LiteLLM proxy key (`LITELLM_API_KEY`) — the shared server
+      * a direct Anthropic key (`ANTHROPIC_API_KEY`, the `sk-ant-` form)
+
+    A key sitting in ANTHROPIC_API_KEY that is *not* an `sk-ant-` key is
+    treated as a proxy key rather than rejected: that is exactly how the
+    LiteLLM key tends to arrive, and failing on it produces a confusing
+    "your key was rejected" when the key is fine and only the route is wrong.
+    """
+    proxy = (os.getenv("LITELLM_API_KEY") or "").strip()
+    if proxy:
+        return proxy, True
+
+    anthropic_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if anthropic_key:
+        return anthropic_key, not anthropic_key.startswith("sk-ant-")
+
+    raise MissingKeyError(
+        "No model key is set. Add LITELLM_API_KEY (the iHQ proxy key) — or "
+        "ANTHROPIC_API_KEY for a direct Anthropic key — to your .env file in "
+        "the project root. Copy .env.example to .env to start."
+    )
+
+
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
 
 
-def build_llm(temperature: float = 0.0, **kwargs) -> ChatAnthropic:
-    """Build the Claude chat model used by every tool and by the agent itself.
+def build_llm(temperature: float = 0.0, **kwargs):
+    """Build the chat model used by every tool and by the agent itself.
+
+    Goes through the iHQ LiteLLM proxy (OpenAI-compatible) when a proxy key is
+    configured, and straight to Anthropic when a real `sk-ant-` key is. Both
+    return a LangChain chat model with the same interface, so nothing downstream
+    knows or cares which route it got.
 
     temperature defaults to 0 because eligibility reasoning should be stable and
     repeatable; this is a matching task, not a creative one.
     """
-    api_key = _require_key("ANTHROPIC_API_KEY", "https://console.anthropic.com")
+    api_key, use_proxy = llm_key()
+    max_tokens = kwargs.pop("max_tokens", MAX_TOKENS)
+    timeout = kwargs.pop("timeout", 120)
+
+    if use_proxy:
+        return ChatOpenAI(
+            model=MODEL_NAME,
+            api_key=api_key,
+            base_url=LITELLM_BASE_URL,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            **kwargs,
+        )
+
+    # Direct Anthropic takes the bare model id, without the proxy's prefix.
     return ChatAnthropic(
-        model=MODEL_NAME,
+        model=MODEL_NAME.split("/", 1)[-1],
         api_key=api_key,
         temperature=temperature,
-        max_tokens=kwargs.pop("max_tokens", MAX_TOKENS),
-        timeout=kwargs.pop("timeout", 120),
+        max_tokens=max_tokens,
+        timeout=timeout,
         **kwargs,
     )
 
@@ -1480,6 +1540,40 @@ def describe_tools() -> list[str]:
     return [t.name for t in build_tools()]
 
 
+def proxy_budget() -> dict:
+    """Ask the LiteLLM proxy how much of the key's budget is left.
+
+    Keys carry a $3 lifetime cap and simply start failing once it is gone, so
+    it is worth seeing the number before a demo rather than after.
+    """
+    try:
+        key, use_proxy = llm_key()
+    except MissingKeyError:
+        return {"available": False}
+    if not use_proxy:
+        return {"available": False}
+
+    try:
+        response = requests.get(
+            LITELLM_BASE_URL.rsplit("/v1", 1)[0] + "/key/info",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        info = response.json()
+        info = info.get("info", info)
+        spend = float(info.get("spend") or 0)
+        budget = info.get("max_budget")
+        return {
+            "available": True,
+            "spend": spend,
+            "max_budget": float(budget) if budget is not None else None,
+            "remaining": (float(budget) - spend) if budget is not None else None,
+        }
+    except Exception:
+        return {"available": False}  # never let a budget check block startup
+
+
 def status() -> dict:
     """What is wired up right now — drives the startup banner and /health."""
     try:
@@ -1489,9 +1583,16 @@ def status() -> dict:
     except Exception:
         giu = {"portal": False, "cms": False}
 
+    try:
+        _, use_proxy = llm_key()
+        has_key = True
+    except MissingKeyError:
+        use_proxy, has_key = False, False
+
     return {
         "model": MODEL_NAME,
-        "anthropic_key": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
+        "route": "iHQ LiteLLM proxy" if use_proxy else "Anthropic direct",
+        "anthropic_key": has_key,
         "tavily_key": bool((os.getenv("TAVILY_API_KEY") or "").strip()),
         "gmail_drafting": gmail_available(),
         "giu_portal": giu.get("portal", False),
@@ -1506,8 +1607,18 @@ def print_banner() -> None:
     tick = lambda on: "on " if on else "off"  # noqa: E731
 
     print(f"  Model            : {state['model']}")
-    print(f"  Anthropic key    : {tick(state['anthropic_key'])}")
+    print(f"  Route            : {state['route']}")
+    print(f"  Model key        : {tick(state['anthropic_key'])}")
     print(f"  Tavily search    : {tick(state['tavily_key'])}")
+
+    budget = proxy_budget()
+    if budget.get("available") and budget.get("max_budget"):
+        left = budget["remaining"]
+        warn = "   <-- running low" if left is not None and left < 0.50 else ""
+        print(
+            f"  Proxy budget     : ${budget['spend']:.4f} spent of "
+            f"${budget['max_budget']:.2f}  (${left:.4f} left){warn}"
+        )
     print(f"  Gmail drafting   : {tick(state['gmail_drafting'])}"
           f"{'' if state['gmail_drafting'] else '  (optional — add credentials.json)'}")
     print(f"  GIU portal / CMS : {tick(state['giu_portal'])}/{tick(state['giu_cms'])}"
@@ -1515,7 +1626,7 @@ def print_banner() -> None:
     print(f"  Tools active     : {', '.join(state['tools'])}")
 
     if not state["anthropic_key"]:
-        print("\n  ! ANTHROPIC_API_KEY is missing — copy .env.example to .env and add it.")
+        print("\n  ! No model key — put LITELLM_API_KEY in .env (copy .env.example).")
     if not state["tavily_key"]:
         print("  ! TAVILY_API_KEY is missing — search will not run without it.")
 

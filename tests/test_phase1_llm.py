@@ -19,8 +19,38 @@ needs_key = pytest.mark.skipif(not HAS_KEY, reason="ANTHROPIC_API_KEY not set")
 
 
 def test_model_name_is_a_module_constant():
-    """The spec asks for the model to be easy to change in one place."""
-    assert agent.MODEL_NAME == "claude-sonnet-4-6"
+    """The spec asks for the model to be easy to change in one place.
+
+    Routed through the iHQ LiteLLM proxy, so the id carries a provider prefix.
+    """
+    assert "claude-sonnet-4-6" in agent.MODEL_NAME
+    assert agent.LITELLM_BASE_URL.endswith("/v1")
+
+
+def test_proxy_key_is_preferred_and_a_bare_key_is_not_mistaken_for_anthropic(monkeypatch):
+    """A LiteLLM key living in ANTHROPIC_API_KEY must route to the proxy.
+
+    That is how the key tends to arrive, and treating it as a direct Anthropic
+    key produced a confusing "your key was rejected" when the key was fine and
+    only the route was wrong.
+    """
+    monkeypatch.setenv("LITELLM_API_KEY", "sk-proxy123")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real")
+    assert agent.llm_key() == ("sk-proxy123", True)  # proxy wins when both are set
+
+    monkeypatch.delenv("LITELLM_API_KEY")
+    assert agent.llm_key() == ("sk-ant-real", False)  # a real sk-ant- key goes direct
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-QFUVshortkey")
+    assert agent.llm_key() == ("sk-QFUVshortkey", True)  # not sk-ant- -> proxy
+
+
+def test_no_key_at_all_names_both_options(monkeypatch):
+    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(agent.MissingKeyError) as excinfo:
+        agent.llm_key()
+    assert "LITELLM_API_KEY" in str(excinfo.value)
 
 
 @pytest.mark.live_llm
