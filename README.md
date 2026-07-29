@@ -129,14 +129,22 @@ paste them (one per line — *descriptions help most*) or upload a transcript or
 course list as `.txt`, `.csv` or `.pdf`. Leave it empty and course matching is
 simply reported as "not assessed".
 
-Each result card always has the same six parts:
+Cards start **collapsed**, showing only what you need to judge them: name,
+eligibility badge, deadline and source. Click **View more** to open one up:
 
 1. **Name & type** and institution, with an eligibility badge
 2. **Fit** — one line on why it suits you
 3. **Requirements & eligibility** — each one ✓ met, ✕ not met, or – not stated
 4. **Course match** — e.g. "4 of 5 required courses matched", or "not assessed"
-5. **Deadline & funding** — deadlines under 30 days away are tinted amber
-6. **Source** — the URL it came from
+5. **Documents to submit** — the documents the application actually asks for
+6. **How to prepare these** — per-document steps tailored to this opportunity
+   and to you: what it must achieve, concrete actions, and the mistake that
+   most often costs applicants
+7. **Deadline & funding** — deadlines under 30 days away are tinted amber
+8. **Source** — the URL it came from
+
+The document guidance is generated **only when you expand a card**, so a
+shortlist you merely skim costs nothing extra.
 
 "Draft email" and "Save deadline" act only on click.
 
@@ -164,6 +172,7 @@ deadlines.json      created at runtime
 | `GET` | `/` | serves the page |
 | `GET` | `/health` | what is configured (the page uses it to explain a disabled button) |
 | `POST` | `/search` | profile in, ranked uniform shortlist out |
+| `POST` | `/document_help` | explains how to prepare a card's required documents |
 | `POST` | `/draft_email` | creates a Gmail **draft** |
 | `POST` | `/save_deadline` | appends to `deadlines.json` |
 

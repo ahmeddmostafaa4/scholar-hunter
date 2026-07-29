@@ -571,6 +571,130 @@ textarea { resize: vertical; min-height: 92px; font-size: 0.9375rem; }
   word-break: break-all;
 }
 
+/* Collapsed summary — what stays visible without expanding */
+.result__summary {
+  display: grid;
+  gap: 6px;
+  font-size: 0.875rem;
+  padding-bottom: 4px;
+}
+
+/* Expand / collapse control */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 6px 12px 6px 0;
+  border: 0;
+  background: none;
+  color: var(--blue-deep);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.toggle:hover { color: var(--blue); }
+.toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.toggle__arrow {
+  display: inline-block;
+  transition: transform 0.22s ease;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.toggle.is-open .toggle__arrow { transform: rotate(180deg); }
+
+.result__details { animation: unfold 0.28s ease-out both; }
+
+@keyframes unfold {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Documents to submit */
+.docs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 0.875rem;
+}
+
+.docs li {
+  position: relative;
+  padding-left: 20px;
+  color: var(--ink-soft);
+}
+
+.docs li::before {
+  content: "📄";
+  position: absolute;
+  left: 0;
+  font-size: 0.8125rem;
+}
+
+/* How to prepare the documents */
+.doc-help__loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}
+
+.doc-help__loading .btn__spinner { color: var(--blue); }
+
+.doc-help__error {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--amber);
+  background: var(--amber-bg);
+  border: 1px solid #fedf89;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.doc-guide {
+  border-left: 3px solid #dbe4ff;
+  padding: 2px 0 2px 14px;
+  margin-bottom: 16px;
+}
+
+.doc-guide:last-child { margin-bottom: 0; }
+
+.doc-guide__name {
+  margin: 0 0 4px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.doc-guide__summary {
+  margin: 0 0 8px;
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+}
+
+.doc-guide__steps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 5px;
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+}
+
+.doc-guide__warn {
+  margin: 8px 0 0;
+  font-size: 0.8125rem;
+  color: var(--amber);
+}
+
 /* Card actions */
 .actions {
   display: flex;

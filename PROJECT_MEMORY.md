@@ -49,6 +49,7 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 | `extract_requirements` | url or text | structured requirements (GPA, degree, nationality, language, field, deadline, funding, required courses; "not stated" when absent) | requests + LLM |
 | `check_eligibility` | requirements, profile | verdict + per-criterion met/not met/not stated + `deadline_status` | LLM reasoning |
 | `match_courses` | student courses, required courses | per required course: matched/partial/missing + which course + confidence | LLM reasoning |
+| `explain_documents` | documents, opportunity, profile | per-document summary, steps, watch-out | LLM reasoning |
 | `draft_email` | to, subject, body | Gmail draft ID (never sends) | Gmail API (OAuth) |
 | `save_deadline` | name, date, url | appended entry | local `deadlines.json` |
 | `get_giu_transcript` (optional) | year code | GPA + completed courses (+ a note that GUC GPA is lower-is-better) | `guc_portal` (reused) |
@@ -118,9 +119,32 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 - Portal is slow/rate-limited → the GIU transcript tool is opt-in (button/CLI), not
   part of the default `/search` path.
 
+## Post-phase features
+
+- **Required documents** are pulled out of the existing extraction call, so they
+  cost nothing extra, and appear as their own card section.
+- **Document guidance** (`explain_documents` / `POST /document_help`) explains how
+  to prepare each one, tailored to the opportunity *and* the student's field, GPA
+  and courses. Generated **lazily, on card expand** — a shortlist the student only
+  skims never pays for it, and re-expanding reuses the first result.
+- **Cards collapse by default**, showing name, verdict, deadline and source; the
+  rest sits behind a "View more" toggle so a shortlist stays scannable.
+- Routed through the **iHQ LiteLLM proxy** (`LITELLM_API_KEY`, OpenAI-compatible);
+  a direct `sk-ant-` key still works. The startup banner shows remaining budget.
+- Gmail uses Google's **InstalledAppFlow directly** — langchain-google-community
+  2.0.10's helper misspells its own parameter and unpacks a class that does not
+  exist, so it raises on every path.
+
 ## Known issues / next steps
 
 - Playwright is a **dev-only** extra for the Phase 7 browser tests; those tests skip themselves when it is absent, and it is left commented out in `requirements.txt`.
+- **Amr's frontend redesign (PR #1) is open and unmerged.** The three features above
+  were built on the current design by choice, so merging that PR will conflict in
+  `index.html`, `style.css` and `script.js`, and the documents section, guidance
+  block and collapse toggle will need reapplying to his layout.
+- The Interests placeholder still suggests "ML funding in Germany", which yields
+  mostly directory pages. Naming a funder ("DAAD study scholarship Germany") is
+  what actually works — the placeholder teaches the wrong input.
 - Google Calendar integration still a TODO (deadline store is local JSON).
 - Portal transcript fetch is slow (~1 req/min rate limit) — used only on demand.
 - **The Anthropic credit balance is currently exhausted** (ran out during Phase 8 testing). The 12 `live_llm` tests skip until it is topped up; they passed in Phases 1/3/4 before that. The app itself reports the condition clearly rather than failing oddly.

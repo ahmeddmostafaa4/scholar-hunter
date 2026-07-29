@@ -15,6 +15,10 @@
   // explain itself instead of failing on click.
   let gmailReady = true;
 
+  // The profile from the last search, so document guidance can be tailored to
+  // this student rather than handing out generic advice.
+  let lastProfile = {};
+
   fetch("/health")
     .then((r) => r.json())
     .then((state) => {
@@ -137,6 +141,84 @@
     return `<span>${text}</span>`;
   }
 
+  function renderDocuments(documents) {
+    if (!documents || !documents.length) {
+      return '<p class="card__hint" style="margin:0">This page does not list the documents required. Check the opportunity\'s own application page before applying.</p>';
+    }
+    const items = documents
+      .map((doc) => `<li>${escapeHtml(doc)}</li>`)
+      .join("");
+    return `<ul class="docs">${items}</ul>`;
+  }
+
+  function renderGuidance(guidance) {
+    if (!guidance || !guidance.length) return "";
+    return guidance
+      .map(
+        (row) => `
+        <div class="doc-guide">
+          <h4 class="doc-guide__name">${escapeHtml(row.document)}</h4>
+          ${row.summary ? `<p class="doc-guide__summary">${escapeHtml(row.summary)}</p>` : ""}
+          <ol class="doc-guide__steps">
+            ${(row.steps || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("")}
+          </ol>
+          ${
+            row.watch_out
+              ? `<p class="doc-guide__warn"><strong>Watch out:</strong> ${escapeHtml(
+                  row.watch_out
+                )}</p>`
+              : ""
+          }
+        </div>`
+      )
+      .join("");
+  }
+
+  /* Guidance costs a model call, so it is fetched the first time a card is
+     expanded — never for results the student only scrolls past. */
+  async function loadDocumentHelp(card, item) {
+    const section = card.querySelector("[data-doc-help]");
+    if (!section || section.dataset.loaded === "yes") return;
+
+    if (!item.documents || !item.documents.length) {
+      section.hidden = true; // nothing to advise on
+      return;
+    }
+
+    section.dataset.loaded = "yes";
+    const body = section.querySelector(".doc-help__body");
+    body.innerHTML =
+      '<p class="doc-help__loading"><span class="btn__spinner" aria-hidden="true"></span> Working out how to prepare these…</p>';
+
+    try {
+      const response = await fetch("/document_help", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          opportunity: item,
+          documents: item.documents,
+          profile: lastProfile,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.ok) {
+        body.innerHTML = `<p class="doc-help__error">${escapeHtml(
+          data.error || "Could not prepare guidance for these documents."
+        )}</p>`;
+        section.dataset.loaded = "no"; // let a retry happen on next expand
+        return;
+      }
+      body.innerHTML =
+        renderGuidance(data.guidance) ||
+        '<p class="card__hint" style="margin:0">No guidance available for these documents.</p>';
+    } catch (err) {
+      body.innerHTML =
+        '<p class="doc-help__error">Could not reach the server for document guidance.</p>';
+      section.dataset.loaded = "no";
+    }
+  }
+
   function renderCard(item, index) {
     const verdict = VERDICT_TEXT[item.verdict] || VERDICT_TEXT.unclear;
     const institution = isStated(item.institution)
@@ -166,36 +248,54 @@
         ${item.trusted_source ? "<span>· trusted source</span>" : ""}
       </div>
 
-      <div class="result__section">
-        <span class="result__label">Fit</span>
-        <p class="result__fit">${escapeHtml(item.fit || item.verdict_reason)}</p>
-      </div>
-
-      <div class="result__section">
-        <span class="result__label">Requirements &amp; eligibility</span>
-        ${renderRequirements(item.requirements)}
-      </div>
-
-      <div class="result__section">
-        <span class="result__label">Course match</span>
-        ${renderCourseMatch(item.course_match)}
-      </div>
-
-      <div class="result__section">
-        <span class="result__label">Deadline &amp; funding</span>
-        <div class="facts">
-          <div><strong>Deadline:</strong> ${renderDeadline(item)}</div>
-          <div><strong>Funding:</strong> ${
-            isStated(item.funding) ? escapeHtml(item.funding) : "Not stated"
-          }</div>
-        </div>
-      </div>
-
-      <div class="result__section">
-        <span class="result__label">Source</span>
+      <!-- Always visible: enough to judge and act on without expanding. -->
+      <div class="result__summary">
+        <div><strong>Deadline:</strong> ${renderDeadline(item)}</div>
         <a class="source-link" href="${escapeHtml(item.url)}"
            target="_blank" rel="noopener noreferrer">${escapeHtml(item.url)}</a>
       </div>
+
+      <!-- Everything else sits behind "View more" so a shortlist stays scannable. -->
+      <div class="result__details" hidden>
+        <div class="result__section">
+          <span class="result__label">Fit</span>
+          <p class="result__fit">${escapeHtml(item.fit || item.verdict_reason)}</p>
+        </div>
+
+        <div class="result__section">
+          <span class="result__label">Requirements &amp; eligibility</span>
+          ${renderRequirements(item.requirements)}
+        </div>
+
+        <div class="result__section">
+          <span class="result__label">Course match</span>
+          ${renderCourseMatch(item.course_match)}
+        </div>
+
+        <div class="result__section">
+          <span class="result__label">Documents to submit</span>
+          ${renderDocuments(item.documents)}
+        </div>
+
+        <div class="result__section doc-help" data-doc-help>
+          <span class="result__label">How to prepare these</span>
+          <div class="doc-help__body"></div>
+        </div>
+
+        <div class="result__section">
+          <span class="result__label">Funding</span>
+          <div class="facts">
+            <div>${
+              isStated(item.funding) ? escapeHtml(item.funding) : "Not stated"
+            }</div>
+          </div>
+        </div>
+      </div>
+
+      <button type="button" class="toggle" aria-expanded="false">
+        <span class="toggle__label">View more</span>
+        <span class="toggle__arrow" aria-hidden="true">⌄</span>
+      </button>
 
       <div class="actions">
         <button type="button" class="btn btn--outline" data-action="draft">
@@ -206,6 +306,20 @@
           <span class="btn__label">Save deadline</span>
         </button>
       </div>`;
+
+    // Expand / collapse. Guidance loads the first time it opens.
+    const toggle = card.querySelector(".toggle");
+    const details = card.querySelector(".result__details");
+    toggle.addEventListener("click", () => {
+      const opening = details.hidden;
+      details.hidden = !opening;
+      toggle.setAttribute("aria-expanded", String(opening));
+      toggle.classList.toggle("is-open", opening);
+      toggle.querySelector(".toggle__label").textContent = opening
+        ? "View less"
+        : "View more";
+      if (opening) loadDocumentHelp(card, item);
+    });
 
     card
       .querySelector('[data-action="draft"]')
@@ -360,6 +474,19 @@
     submitBtn.innerHTML =
       '<span class="btn__spinner" aria-hidden="true"></span>' +
       '<span class="btn__label">Searching…</span>';
+
+    // Remember the profile so expanded cards can tailor document guidance to it.
+    lastProfile = {
+      field_of_study: form.elements.field_of_study.value.trim(),
+      degree_level: form.elements.degree_level.value.trim(),
+      gpa: form.elements.gpa.value.trim(),
+      nationality: form.elements.nationality.value.trim(),
+      interests: form.elements.interests.value.trim(),
+      courses: form.elements.courses.value
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    };
 
     try {
       // Send as multipart so a transcript upload rides along with the profile.

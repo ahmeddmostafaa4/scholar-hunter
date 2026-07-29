@@ -7,6 +7,7 @@ Playwright is not installed — it is a dev-only extra, not a runtime dependency
     pip install playwright && playwright install chromium
 """
 
+import json
 import socket
 import threading
 import time
@@ -41,11 +42,30 @@ CARD = {
     "course_match": {"assessed": True, "summary": "2 of 3 required courses matched",
                      "matched": 2, "partial": 0, "total": 3,
                      "confidence_capped": False, "matches": []},
+    "documents": [
+        "Motivation letter (max 2 pages)",
+        "CV in tabular form",
+        "Two academic letters of recommendation",
+    ],
     "deadline": "15 January 2099",
     "deadline_status": "open",
     "funding": "Full tuition plus a monthly stipend",
     "url": "https://www2.daad.de/example",
     "trusted_source": True,
+}
+
+GUIDANCE = {
+    "ok": True,
+    "assessed": True,
+    "guidance": [
+        {
+            "document": "Motivation letter (max 2 pages)",
+            "summary": "Convince DAAD your CS background fits.",
+            "steps": ["Open with a concrete moment from your AI coursework.",
+                      "Name a specific German research group."],
+            "watch_out": "A generic letter that could suit any country.",
+        }
+    ],
 }
 
 
@@ -66,8 +86,14 @@ def server():
     """
     originals = {
         name: getattr(agent, name)
-        for name in ("run_shortlist", "save_deadline_entry", "gmail_available")
+        for name in (
+            "run_shortlist",
+            "save_deadline_entry",
+            "gmail_available",
+            "document_guidance",
+        )
     }
+    agent.document_guidance = lambda docs, **kw: dict(GUIDANCE)
 
     agent.run_shortlist = lambda profile, **kw: {
         "ok": True, "results": [CARD], "considered": 9,
@@ -167,18 +193,135 @@ def test_submitting_renders_a_uniform_card(page):
     _fill_valid(page)
     page.click("#submit-btn")
     page.wait_for_selector(".result", timeout=15000)
+    page.click(".toggle")  # the detail lives behind View more
+    page.wait_for_selector(".result__details:visible", timeout=5000)
 
-    card = page.locator(".result").first
-    text = card.inner_text()
+    text = page.locator(".result").first.inner_text()
 
-    # The six bullets, all present.
+    # Every section, all present.
     assert "DAAD Study Scholarship" in text
     assert "FIT" in text
     assert "REQUIREMENTS & ELIGIBILITY" in text
     assert "COURSE MATCH" in text
-    assert "DEADLINE & FUNDING" in text
-    assert "SOURCE" in text
+    assert "DOCUMENTS TO SUBMIT" in text
+    assert "FUNDING" in text
     assert "https://www2.daad.de/example" in text
+
+
+# --- collapse / view more --------------------------------------------------
+
+
+def test_cards_start_collapsed_showing_only_the_essentials(page):
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+
+    # Hidden until asked for.
+    assert not page.is_visible(".result__details")
+    assert "View more" in page.inner_text(".toggle")
+
+    # But enough to judge and act on stays visible.
+    card = page.locator(".result").first.inner_text()
+    assert "DAAD Study Scholarship" in card
+    assert "Eligible" in card
+    assert "15 January 2099" in card
+    assert "https://www2.daad.de/example" in card
+
+
+def test_view_more_expands_and_collapses_again(page):
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+    toggle = page.locator(".toggle").first
+
+    toggle.click()
+    page.wait_for_selector(".result__details:visible", timeout=5000)
+    assert toggle.get_attribute("aria-expanded") == "true"
+    assert "View less" in toggle.inner_text()
+
+    toggle.click()
+    assert not page.is_visible(".result__details")
+    assert toggle.get_attribute("aria-expanded") == "false"
+    assert "View more" in toggle.inner_text()
+
+
+# --- documents and guidance ------------------------------------------------
+
+
+def test_required_documents_are_listed(page):
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+    page.click(".toggle")
+    page.wait_for_selector(".docs li", timeout=5000)
+
+    assert page.locator(".docs li").count() == 3
+    assert "Motivation letter (max 2 pages)" in page.inner_text(".docs")
+
+
+def test_documents_appear_above_the_funding_section(page):
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+    page.click(".toggle")
+    page.wait_for_selector(".docs", timeout=5000)
+
+    docs_y = page.locator(".docs").bounding_box()["y"]
+    funding_y = page.locator(".facts").last.bounding_box()["y"]
+    assert docs_y < funding_y
+
+
+def test_guidance_loads_only_when_the_card_is_expanded(page):
+    """It costs a model call, so a shortlist the student skims must not pay for it."""
+    calls = []
+    page.route("**/document_help", lambda route: (
+        calls.append(1),
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps(GUIDANCE)),
+    )[-1])
+
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+    page.wait_for_timeout(600)
+    assert calls == [], "guidance must not be fetched for a collapsed card"
+
+    page.click(".toggle")
+    page.wait_for_selector(".doc-guide", timeout=10000)
+    assert len(calls) == 1
+
+    # Collapsing and re-expanding must not pay for it twice.
+    page.click(".toggle")
+    page.click(".toggle")
+    page.wait_for_timeout(600)
+    assert len(calls) == 1, "guidance should be cached after the first load"
+
+
+def test_guidance_shows_steps_and_the_warning(page):
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+    page.click(".toggle")
+    page.wait_for_selector(".doc-guide", timeout=10000)
+
+    text = page.inner_text(".doc-help")
+    assert "Motivation letter" in text
+    assert "German research group" in text
+    assert "Watch out" in text
+
+
+def test_a_guidance_failure_shows_a_styled_message_not_a_crash(page):
+    page.route("**/document_help", lambda route: route.fulfill(
+        status=502, content_type="application/json",
+        body='{"ok": false, "error": "Could not prepare document guidance."}'))
+
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+    page.click(".toggle")
+    page.wait_for_selector(".doc-help__error", timeout=10000)
+
+    assert "Could not prepare" in page.inner_text(".doc-help__error")
 
 
 def test_eligibility_badge_uses_icon_and_label_not_colour_alone(page):
@@ -195,7 +338,9 @@ def test_eligibility_badge_uses_icon_and_label_not_colour_alone(page):
 def test_requirement_rows_show_per_requirement_status(page):
     _fill_valid(page)
     page.click("#submit-btn")
-    page.wait_for_selector(".reqs li", timeout=15000)
+    page.wait_for_selector(".result", timeout=15000)
+    page.click(".toggle")  # the checklist lives behind View more
+    page.wait_for_selector(".reqs li:visible", timeout=5000)
 
     rows = page.locator(".reqs li")
     assert rows.count() == 2
@@ -206,7 +351,9 @@ def test_requirement_rows_show_per_requirement_status(page):
 def test_course_match_summary_and_bar(page):
     _fill_valid(page)
     page.click("#submit-btn")
-    page.wait_for_selector(".course-match", timeout=15000)
+    page.wait_for_selector(".result", timeout=15000)
+    page.click(".toggle")  # the course match lives behind View more
+    page.wait_for_selector(".course-match:visible", timeout=5000)
 
     assert "2 of 3 required courses matched" in page.inner_text(".course-match")
     width = page.locator(".bar__fill").first.get_attribute("style")
