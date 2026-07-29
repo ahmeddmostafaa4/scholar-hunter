@@ -925,6 +925,46 @@ def gmail_available() -> bool:
     return CREDENTIALS_FILE.is_file()
 
 
+# Compose only. The agent holds no permission to send — a stronger guarantee
+# than merely declining to.
+GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.compose"]
+
+
+def _gmail_credentials():
+    """Run the standard Google desktop OAuth flow, caching the token locally.
+
+    Deliberately does NOT use langchain-google-community's `get_gmail_credentials`
+    helper. In 2.0.10 that helper misspells its own parameter
+    (`client_sercret_file`) and, worse, unpacks `ServiceCredentials` from
+    `google.oauth2.service_account`, where the class is actually called
+    `Credentials` — so it raises on every path, service account or not. This is
+    the documented flow it was wrapping anyway, and it is about ten lines.
+    """
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    creds = None
+    if TOKEN_FILE.is_file():
+        try:
+            creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), GMAIL_SCOPES)
+        except Exception:
+            creds = None  # a stale or hand-edited token should not be fatal
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(CREDENTIALS_FILE), GMAIL_SCOPES
+            )
+            # Opens the consent screen in a browser on first use only.
+            creds = flow.run_local_server(port=0)
+        TOKEN_FILE.write_text(creds.to_json())
+
+    return creds
+
+
 def create_gmail_draft(to: str, subject: str, body: str) -> dict:
     """Create a Gmail DRAFT. Never sends — that is the human-in-the-loop guarantee.
 
@@ -940,20 +980,11 @@ def create_gmail_draft(to: str, subject: str, body: str) -> dict:
         return {"ok": False, "available": False, "error": EMAIL_UNAVAILABLE}
 
     try:
+        from googleapiclient.discovery import build
         from langchain_google_community import GmailToolkit
-        from langchain_google_community.gmail.utils import (
-            build_resource_service,
-            get_gmail_credentials,
-        )
 
-        credentials = get_gmail_credentials(
-            token_file=str(TOKEN_FILE),
-            client_secrets_file=str(CREDENTIALS_FILE),
-            # Compose scope only, so the agent cannot send even if asked to —
-            # holding no send permission is a stronger guarantee than declining.
-            scopes=["https://www.googleapis.com/auth/gmail.compose"],
-        )
-        toolkit = GmailToolkit(api_resource=build_resource_service(credentials=credentials))
+        credentials = _gmail_credentials()
+        toolkit = GmailToolkit(api_resource=build("gmail", "v1", credentials=credentials))
 
         create_draft = next(
             (t for t in toolkit.get_tools() if "draft" in t.name.lower()), None

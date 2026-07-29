@@ -118,8 +118,16 @@ def test_only_the_compose_scope_is_requested():
     assert "https://mail.google.com/" not in source, "that scope grants full mailbox access"
 
 
-def test_draft_result_states_that_nothing_was_sent(monkeypatch):
+def _stub_gmail(monkeypatch):
+    """Stand in for the whole Gmail path — credentials, service, and toolkit.
+
+    `_gmail_credentials` must be stubbed: it runs the real OAuth flow, which
+    blocks on a browser consent screen and hangs the suite forever.
+    """
+    import types
+
     monkeypatch.setattr(agent, "gmail_available", lambda: True)
+    monkeypatch.setattr(agent, "_gmail_credentials", lambda: object())
 
     class FakeTool:
         name = "create_gmail_draft"
@@ -131,22 +139,77 @@ def test_draft_result_states_that_nothing_was_sent(monkeypatch):
         def get_tools(self):
             return [FakeTool()]
 
-    import types
-
     fake_community = types.ModuleType("langchain_google_community")
     fake_community.GmailToolkit = lambda **kw: FakeToolkit()
-    fake_utils = types.ModuleType("langchain_google_community.gmail.utils")
-    fake_utils.get_gmail_credentials = lambda **kw: object()
-    fake_utils.build_resource_service = lambda **kw: object()
-
     monkeypatch.setitem(sys.modules, "langchain_google_community", fake_community)
-    monkeypatch.setitem(sys.modules, "langchain_google_community.gmail.utils", fake_utils)
+
+    fake_discovery = types.ModuleType("googleapiclient.discovery")
+    fake_discovery.build = lambda *a, **kw: object()
+    monkeypatch.setitem(sys.modules, "googleapiclient.discovery", fake_discovery)
+
+
+def test_draft_result_states_that_nothing_was_sent(monkeypatch):
+    _stub_gmail(monkeypatch)
 
     result = agent.create_gmail_draft("office@uni.de", "Inquiry", "Hello")
     assert result["ok"] is True
     assert result["sent"] is False
     assert result["draft_id"] == "r-12345"  # Gmail draft ids carry an "r-" prefix
     assert "NOT been sent" in result["message"]
+
+
+def test_the_broken_upstream_credential_helper_is_not_used():
+    """Regression: langchain-google-community 2.0.10 ships a helper that
+    misspells its own parameter (`client_sercret_file`) and unpacks a
+    `ServiceCredentials` class that does not exist in google.oauth2 — it raises
+    on every path. We run the documented OAuth flow ourselves instead."""
+    # Check for real use, not mentions — the comment above _gmail_credentials
+    # names the broken helper on purpose, to explain why we avoid it.
+    code = [
+        line
+        for line in Path(agent.__file__).read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code)
+    assert "langchain_google_community.gmail.utils" not in code
+    assert "get_gmail_credentials(" not in code
+    assert "build_resource_service(" not in code
+    assert "InstalledAppFlow.from_client_secrets_file" in code
+
+
+def test_a_stale_token_file_does_not_break_drafting(monkeypatch, tmp_path):
+    """A hand-edited or corrupted token.json should fall back to re-authorising,
+    not raise."""
+    bad_token = tmp_path / "token.json"
+    bad_token.write_text("{ not json")
+    monkeypatch.setattr(agent, "TOKEN_FILE", bad_token)
+
+    reauthorised = {"ran": False}
+
+    class FakeFlow:
+        @staticmethod
+        def from_client_secrets_file(_secrets, _scopes):
+            reauthorised["ran"] = True
+            return FakeFlow()
+
+        def run_local_server(self, port=0):
+            class Creds:
+                valid = True
+
+                def to_json(self):
+                    return '{"token": "fresh"}'
+
+            return Creds()
+
+    import types
+
+    fake_flow_mod = types.ModuleType("google_auth_oauthlib.flow")
+    fake_flow_mod.InstalledAppFlow = FakeFlow
+    monkeypatch.setitem(sys.modules, "google_auth_oauthlib.flow", fake_flow_mod)
+
+    agent._gmail_credentials()
+    assert reauthorised["ran"], "a corrupt token must trigger re-authorisation"
+    assert "fresh" in bad_token.read_text()
 
 
 # --- wiring ----------------------------------------------------------------
