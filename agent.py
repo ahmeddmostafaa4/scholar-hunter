@@ -474,7 +474,18 @@ def _ask_json(prompt: str, *, fallback: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def fetch_page_text(url: str, max_chars: int = 12000) -> dict:
+# How much of an opportunity page we keep and how much reaches the model.
+#
+# These were 12,000 / 10,000, which was too tight: on real DAAD pages the
+# application-documents list sits at roughly characters 10,000-13,000, so it was
+# cut off and the tool reported "this page does not list the documents required"
+# about pages that plainly did. Eligibility text appears early, but documents and
+# deadlines live near the bottom — the part that was being thrown away.
+PAGE_FETCH_CHARS = 30000
+PAGE_MODEL_CHARS = 20000
+
+
+def fetch_page_text(url: str, max_chars: int = PAGE_FETCH_CHARS) -> dict:
     """Download an opportunity page and return its visible text.
 
     Kept separate from extraction so a fetch failure is distinguishable from an
@@ -566,7 +577,7 @@ Rules — these matter more than completeness:
 
 TEXT:
 \"\"\"
-{text[:10000]}
+{text[:PAGE_MODEL_CHARS]}
 \"\"\"
 """
     parsed = _ask_json(prompt, fallback={"requirements": blank})
