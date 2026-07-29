@@ -27,6 +27,7 @@ def _assert_shape(outcome):
         assert r["title"], "result has no title"
 
 
+@pytest.mark.live_search
 @needs_key
 def test_masters_scholarship_germany():
     outcome = agent.search_opportunities(
@@ -36,6 +37,7 @@ def test_masters_scholarship_germany():
     assert outcome["count"] > 0, "expected real results for a common query"
 
 
+@pytest.mark.live_search
 @needs_key
 def test_phd_funding_egypt():
     outcome = agent.search_opportunities("PhD funding for Egyptian students", max_results=5)
@@ -43,6 +45,7 @@ def test_phd_funding_egypt():
     assert outcome["count"] > 0
 
 
+@pytest.mark.live_search
 @needs_key
 def test_nonsense_query_does_not_crash():
     """A deliberately meaningless query must return cleanly, not raise."""
@@ -51,6 +54,7 @@ def test_nonsense_query_does_not_crash():
     assert isinstance(outcome["results"], list)  # may legitimately be empty
 
 
+@pytest.mark.live_search
 @needs_key
 def test_tool_output_always_carries_urls():
     """The agent must be able to cite; the tool string must contain the URLs."""
@@ -66,6 +70,29 @@ def test_empty_query_is_rejected_without_calling_the_api():
     assert outcome["ok"] is False
     assert "empty" in outcome["error"].lower()
     assert outcome["results"] == []
+
+
+def test_quota_exhaustion_is_reported_not_disguised_as_no_results(monkeypatch):
+    """Regression: Tavily answers a used-up quota with an error, and treating that
+    as an empty result list told the student "nothing matched your profile" when
+    the real cause was billing."""
+    class Boom:
+        def invoke(self, _q):
+            raise RuntimeError("432 Client Error: for url: https://api.tavily.com/search")
+
+    monkeypatch.setattr(agent, "_tavily", lambda *a, **k: Boom())
+    outcome = agent.search_opportunities("master scholarship germany")
+
+    assert outcome["ok"] is False
+    assert "quota" in outcome["error"].lower()
+    assert "tavily.com" in outcome["error"]
+
+
+def test_an_error_string_payload_is_also_treated_as_a_failure():
+    """Tavily sometimes returns the error in the payload rather than raising."""
+    with pytest.raises(agent.SearchUnavailable) as excinfo:
+        agent._clean_results("This request exceeds your plan's set usage limit.")
+    assert "quota" in str(excinfo.value).lower()
 
 
 def test_missing_key_reports_clearly(monkeypatch):

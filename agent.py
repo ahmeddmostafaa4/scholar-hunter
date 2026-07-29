@@ -226,13 +226,40 @@ def _tavily(max_results: int = SEARCH_RESULTS, trusted_only: bool = False):
     return TavilySearchResults(**kwargs)
 
 
+class SearchUnavailable(RuntimeError):
+    """The search backend answered, but with a failure rather than results."""
+
+
+def _explain_search_error(text: str) -> str:
+    """Turn a Tavily failure into something a student can act on.
+
+    Handles both shapes it arrives in: an error string in the payload, and an
+    HTTPError raised by the client. 432 is Tavily's "plan usage limit reached".
+    """
+    lowered = text.lower()
+    if "usage limit" in lowered or "exceeds your plan" in lowered or "432" in text:
+        return (
+            "Your Tavily search quota is used up, so no search could run. Wait for "
+            "it to reset or upgrade at tavily.com — the free tier is capped."
+        )
+    if "unauthorized" in lowered or "invalid api key" in lowered or "401" in text:
+        return "Your TAVILY_API_KEY was rejected. Check the value in your .env file."
+    if "rate limit" in lowered or "429" in text:
+        return "Tavily is rate-limiting requests. Wait a moment and try again."
+    return f"Web search failed: {text[:200]}"
+
+
 def _clean_results(raw) -> list[dict]:
     """Normalise Tavily output into {title, url, snippet, trusted} dicts.
 
-    Tavily returns a list of dicts on success, but a plain string when something
-    went wrong upstream — handle both rather than assuming.
+    Tavily returns a list of dicts on success but a plain string when something
+    went wrong upstream — an exhausted quota, a bad key. Treating that string as
+    "no results" is how a billing problem gets reported to the student as
+    "nothing matched your profile", so raise instead.
     """
-    if isinstance(raw, str) or not isinstance(raw, list):
+    if isinstance(raw, str):
+        raise SearchUnavailable(_explain_search_error(raw))
+    if not isinstance(raw, list):
         return []
 
     cleaned = []
@@ -265,21 +292,34 @@ def search_opportunities(query: str, max_results: int = SEARCH_RESULTS) -> dict:
     if not query:
         return {"ok": False, "error": "Search query was empty.", "results": []}
 
+    unavailable = ""  # a backend failure, kept so it can be reported honestly
+
     try:
         trusted = _clean_results(_tavily(max_results, trusted_only=True).invoke(query))
     except MissingKeyError as exc:
         return {"ok": False, "error": str(exc), "results": []}
-    except Exception:
-        trusted = []  # a failed narrow pass must not sink the general one
+    except SearchUnavailable as exc:
+        trusted, unavailable = [], str(exc)
+    except Exception as exc:
+        # A failed narrow pass must not sink the general one, but remember why
+        # in case that fails too.
+        trusted, unavailable = [], _explain_search_error(str(exc))
 
     try:
         general = _clean_results(_tavily(max_results, trusted_only=False).invoke(query))
     except MissingKeyError as exc:
         return {"ok": False, "error": str(exc), "results": []}
+    except SearchUnavailable as exc:
+        general, unavailable = [], str(exc)
     except Exception as exc:
         if not trusted:
-            return {"ok": False, "error": f"Web search failed: {exc}", "results": []}
+            return {"ok": False, "error": _explain_search_error(str(exc)), "results": []}
         general = []
+
+    # Quota exhausted or key rejected with nothing to show: say so, rather than
+    # letting it read as "we searched and found nothing for you".
+    if unavailable and not trusted and not general:
+        return {"ok": False, "error": unavailable, "results": []}
 
     # Merge, de-duplicating on URL and keeping trusted sources at the top.
     merged: dict[str, dict] = {}

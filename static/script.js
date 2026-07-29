@@ -5,11 +5,52 @@
 
   const form = document.getElementById("profile-form");
   const submitBtn = document.getElementById("submit-btn");
+  const profileView = document.getElementById("profile-view");
+  const resultsView = document.getElementById("results-view");
+  const profileStrip = document.getElementById("profile-strip");
+  const editProfileBtn = document.getElementById("edit-profile");
+  const backlinkRow = document.getElementById("backlink-row");
+  const backToResultsBtn = document.getElementById("back-to-results");
   const loading = document.getElementById("loading");
+  const loadingText = document.getElementById("loading-text");
   const resultsEl = document.getElementById("results");
   const summaryEl = document.getElementById("results-summary");
   const errorBanner = document.getElementById("error-banner");
   const errorText = document.getElementById("error-text");
+
+  // The two pages of the app. The form is only hidden, never destroyed, so
+  // editing the profile keeps everything the student already typed.
+  let hasShortlist = false;
+
+  function showProfileView() {
+    resultsView.hidden = true;
+    profileView.hidden = false;
+    backlinkRow.hidden = !hasShortlist;
+    window.scrollTo({ top: 0 });
+  }
+
+  function showResultsView() {
+    profileView.hidden = true;
+    resultsView.hidden = false;
+    window.scrollTo({ top: 0 });
+  }
+
+  // What the shortlist was audited against, restated on the results page.
+  function profileSummary() {
+    const parts = [
+      form.elements.field_of_study.value.trim(),
+      form.elements.degree_level.value,
+      form.elements.nationality.value.trim(),
+    ].filter(Boolean);
+    const gpa = form.elements.gpa.value.trim();
+    if (gpa) parts.push("GPA " + gpa);
+    const interests = form.elements.interests.value.trim();
+    if (interests) parts.push(interests);
+    return parts.join(" · ");
+  }
+
+  editProfileBtn.addEventListener("click", showProfileView);
+  backToResultsBtn.addEventListener("click", showResultsView);
 
   // Whether Gmail drafting is configured. Checked once so the Draft button can
   // explain itself instead of failing on click.
@@ -63,6 +104,29 @@
     return Math.round((parsed - Date.now()) / 86400000);
   }
 
+  // What the agent is doing, narrated while the student waits.
+  const LOADING_STEPS = [
+    "Searching trusted sources…",
+    "Opening each opportunity's own page…",
+    "Checking requirements one at a time…",
+    "Stamping what is met, not met, or not stated…",
+  ];
+  let loadingTimer = null;
+
+  function startLoadingNarration() {
+    let step = 0;
+    loadingText.textContent = LOADING_STEPS[0];
+    loadingTimer = setInterval(() => {
+      step = (step + 1) % LOADING_STEPS.length;
+      loadingText.textContent = LOADING_STEPS[step];
+    }, 3500);
+  }
+
+  function stopLoadingNarration() {
+    clearInterval(loadingTimer);
+    loadingTimer = null;
+  }
+
   // --- rendering ---------------------------------------------------------
 
   const VERDICT_TEXT = {
@@ -83,30 +147,29 @@
       return '<p class="card__hint" style="margin:0">This page states no checkable requirements.</p>';
     }
     const items = rows
-      .map(
-        (row) => `
+      .map((row) => {
+        const mark = STATUS_MARK[row.status] || "–";
+        const word = STATUS_WORD[row.status] || row.status;
+        return `
         <li>
-          <span class="reqs__mark reqs__mark--${escapeHtml(row.status)}" aria-hidden="true">${
-            STATUS_MARK[row.status] || "–"
-          }</span>
-          <span>
-            <span class="reqs__label">${escapeHtml(row.label)}:</span>
-            <span class="reqs__value">${escapeHtml(row.required)}</span>
-            <span class="reqs__status">— ${escapeHtml(
-              STATUS_WORD[row.status] || row.status
-            )}${row.note ? ". " + escapeHtml(row.note) : ""}</span>
-          </span>
-        </li>`
-      )
+          <div class="ledger__row">
+            <span class="ledger__key">${escapeHtml(row.label)}</span>
+            <span class="ledger__val">${escapeHtml(row.required)}</span>
+            <span class="ledger__leader" aria-hidden="true"></span>
+            <span class="stamp stamp--${escapeHtml(row.status)}">${mark} ${escapeHtml(word)}</span>
+          </div>
+          ${row.note ? `<p class="ledger__note">${escapeHtml(row.note)}</p>` : ""}
+        </li>`;
+      })
       .join("");
-    return `<ul class="reqs">${items}</ul>`;
+    return `<ul class="ledger reqs">${items}</ul>`;
   }
 
   function renderCourseMatch(match) {
     if (!match || !match.assessed) {
-      return `<p class="course-match" style="margin:0">Not assessed${
+      return `<p class="course-match">Not assessed${
         match && match.summary === "not assessed"
-          ? " — add your courses above, or this programme lists no prerequisites."
+          ? " — add your courses in the profile, or this programme lists no prerequisites."
           : "."
       }</p>`;
     }
@@ -115,7 +178,7 @@
       ? '<span class="course-match__note"> Confidence is capped: course names were given without descriptions.</span>'
       : "";
     return `
-      <p class="course-match" style="margin:0">
+      <p class="course-match">
         <strong>${escapeHtml(match.summary)}</strong>${note}
       </p>
       <div class="bar" role="img" aria-label="${escapeHtml(match.summary)}">
@@ -125,28 +188,36 @@
 
   function renderDeadline(item) {
     if (!isStated(item.deadline)) {
-      return "<span>Not stated</span>";
+      return '<span class="ledger__val">Not stated</span>';
     }
     const text = escapeHtml(item.deadline);
     const days = daysUntil(item.deadline);
 
     if (item.deadline_status === "expired" || (days !== null && days < 0)) {
-      return `<span class="deadline--expired">${text} — closed</span>`;
+      return `<span class="ledger__val">${text}</span>
+        <span class="deadline--expired">closed</span>`;
     }
     if (days !== null && days <= 30) {
-      return `<span class="deadline--soon">${text} — ${days} day${
-        days === 1 ? "" : "s"
-      } left</span>`;
+      return `<span class="ledger__val">${text}</span>
+        <span class="deadline--soon">${days} day${days === 1 ? "" : "s"} left</span>`;
     }
-    return `<span>${text}</span>`;
+    return `<span class="ledger__val">${text}</span>`;
   }
 
+  /* Documents the application asks for. Rendered as a stamped checklist so it
+     reads like the rest of the audit rather than a bare bullet list. */
   function renderDocuments(documents) {
     if (!documents || !documents.length) {
-      return '<p class="card__hint" style="margin:0">This page does not list the documents required. Check the opportunity\'s own application page before applying.</p>';
+      return '<p class="muted-note">This page does not list the documents required — check the opportunity\'s own application page before applying.</p>';
     }
     const items = documents
-      .map((doc) => `<li>${escapeHtml(doc)}</li>`)
+      .map(
+        (doc) => `
+        <li>
+          <span class="docs__mark" aria-hidden="true">▢</span>
+          <span class="docs__name">${escapeHtml(doc)}</span>
+        </li>`
+      )
       .join("");
     return `<ul class="docs">${items}</ul>`;
   }
@@ -164,7 +235,7 @@
           </ol>
           ${
             row.watch_out
-              ? `<p class="doc-guide__warn"><strong>Watch out:</strong> ${escapeHtml(
+              ? `<p class="doc-guide__warn"><span class="doc-guide__warn-tag">WATCH OUT</span> ${escapeHtml(
                   row.watch_out
                 )}</p>`
               : ""
@@ -175,7 +246,7 @@
   }
 
   /* Guidance costs a model call, so it is fetched the first time a card is
-     expanded — never for results the student only scrolls past. */
+     opened — never for results the student only scrolls past. */
   async function loadDocumentHelp(card, item) {
     const section = card.querySelector("[data-doc-help]");
     if (!section || section.dataset.loaded === "yes") return;
@@ -206,12 +277,12 @@
         body.innerHTML = `<p class="doc-help__error">${escapeHtml(
           data.error || "Could not prepare guidance for these documents."
         )}</p>`;
-        section.dataset.loaded = "no"; // let a retry happen on next expand
+        section.dataset.loaded = "no"; // allow a retry on the next open
         return;
       }
       body.innerHTML =
         renderGuidance(data.guidance) ||
-        '<p class="card__hint" style="margin:0">No guidance available for these documents.</p>';
+        '<p class="muted-note">No guidance available for these documents.</p>';
     } catch (err) {
       body.innerHTML =
         '<p class="doc-help__error">Could not reach the server for document guidance.</p>';
@@ -248,14 +319,22 @@
         ${item.trusted_source ? "<span>· trusted source</span>" : ""}
       </div>
 
-      <!-- Always visible: enough to judge and act on without expanding. -->
-      <div class="result__summary">
-        <div><strong>Deadline:</strong> ${renderDeadline(item)}</div>
+      <!-- Always visible: enough to judge and act on without opening the file. -->
+      <div class="result__section">
+        <ul class="ledger facts">
+          <li>
+            <div class="ledger__row">
+              <span class="ledger__key">Deadline</span>
+              <span class="ledger__leader" aria-hidden="true"></span>
+              ${renderDeadline(item)}
+            </div>
+          </li>
+        </ul>
         <a class="source-link" href="${escapeHtml(item.url)}"
            target="_blank" rel="noopener noreferrer">${escapeHtml(item.url)}</a>
       </div>
 
-      <!-- Everything else sits behind "View more" so a shortlist stays scannable. -->
+      <!-- The full audit, opened on request so a shortlist stays scannable. -->
       <div class="result__details" hidden>
         <div class="result__section">
           <span class="result__label">Fit</span>
@@ -284,11 +363,17 @@
 
         <div class="result__section">
           <span class="result__label">Funding</span>
-          <div class="facts">
-            <div>${
-              isStated(item.funding) ? escapeHtml(item.funding) : "Not stated"
-            }</div>
-          </div>
+          <ul class="ledger facts">
+            <li>
+              <div class="ledger__row">
+                <span class="ledger__key">Covers</span>
+                <span class="ledger__leader" aria-hidden="true"></span>
+                <span class="ledger__val">${
+                  isStated(item.funding) ? escapeHtml(item.funding) : "Not stated"
+                }</span>
+              </div>
+            </li>
+          </ul>
         </div>
       </div>
 
@@ -307,7 +392,7 @@
         </button>
       </div>`;
 
-    // Expand / collapse. Guidance loads the first time it opens.
+    // Expand / collapse. Document guidance loads the first time it opens.
     const toggle = card.querySelector(".toggle");
     const details = card.querySelector(".result__details");
     toggle.addEventListener("click", () => {
@@ -467,14 +552,6 @@
       return;
     }
 
-    resultsEl.innerHTML = "";
-    summaryEl.hidden = true;
-    loading.hidden = false;
-    submitBtn.disabled = true;
-    submitBtn.innerHTML =
-      '<span class="btn__spinner" aria-hidden="true"></span>' +
-      '<span class="btn__label">Searching…</span>';
-
     // Remember the profile so expanded cards can tailor document guidance to it.
     lastProfile = {
       field_of_study: form.elements.field_of_study.value.trim(),
@@ -488,6 +565,18 @@
         .filter(Boolean),
     };
 
+    resultsEl.innerHTML = "";
+    summaryEl.hidden = true;
+    profileStrip.textContent = profileSummary();
+    showResultsView();
+    loading.hidden = false;
+    startLoadingNarration();
+    submitBtn.disabled = true;
+    submitBtn.innerHTML =
+      '<span class="btn__spinner" aria-hidden="true"></span>' +
+      '<span class="btn__label">Searching…</span>';
+
+    let failed = false;
     try {
       // Send as multipart so a transcript upload rides along with the profile.
       const response = await fetch("/search", {
@@ -497,18 +586,24 @@
       const body = await response.json();
 
       if (!response.ok || !body.ok) {
+        failed = true;
         showError(body.error || "The search could not be completed.");
         return;
       }
+      hasShortlist = true;
       renderResults(body);
     } catch (err) {
+      failed = true;
       showError(
         "Could not reach the server. Check that `python app.py` is still running in your terminal."
       );
     } finally {
+      stopLoadingNarration();
       loading.hidden = true;
       submitBtn.disabled = false;
-      submitBtn.innerHTML = '<span class="btn__label">Find Scholarships</span>';
+      submitBtn.innerHTML = '<span class="btn__label">Find scholarships</span>';
+      // A failed search returns to the form so the student can fix and retry.
+      if (failed) showProfileView();
     }
   });
 

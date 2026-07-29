@@ -151,8 +151,8 @@ def _fill_valid(page):
 
 
 def test_hero_and_form_render(page):
+    assert page.inner_text(".wordmark") == "Scholar Hunter"
     assert page.is_visible(".hero__title")
-    assert page.inner_text(".hero__title") == "Scholar Hunter"
     assert page.is_visible("#profile-form")
     assert page.locator(".chip").count() == 3
 
@@ -218,12 +218,13 @@ def test_cards_start_collapsed_showing_only_the_essentials(page):
 
     # Hidden until asked for.
     assert not page.is_visible(".result__details")
-    assert "View more" in page.inner_text(".toggle")
+    # CSS uppercases the toggle label, so compare case-insensitively.
+    assert "view more" in page.inner_text(".toggle").lower()
 
     # But enough to judge and act on stays visible.
     card = page.locator(".result").first.inner_text()
     assert "DAAD Study Scholarship" in card
-    assert "Eligible" in card
+    assert "eligible" in card.lower()  # the stamp is uppercased by CSS
     assert "15 January 2099" in card
     assert "https://www2.daad.de/example" in card
 
@@ -237,12 +238,12 @@ def test_view_more_expands_and_collapses_again(page):
     toggle.click()
     page.wait_for_selector(".result__details:visible", timeout=5000)
     assert toggle.get_attribute("aria-expanded") == "true"
-    assert "View less" in toggle.inner_text()
+    assert "view less" in toggle.inner_text().lower()
 
     toggle.click()
     assert not page.is_visible(".result__details")
     assert toggle.get_attribute("aria-expanded") == "false"
-    assert "View more" in toggle.inner_text()
+    assert "view more" in toggle.inner_text().lower()
 
 
 # --- documents and guidance ------------------------------------------------
@@ -307,7 +308,7 @@ def test_guidance_shows_steps_and_the_warning(page):
     text = page.inner_text(".doc-help")
     assert "Motivation letter" in text
     assert "German research group" in text
-    assert "Watch out" in text
+    assert "watch out" in text.lower()  # the tag is uppercased by CSS
 
 
 def test_a_guidance_failure_shows_a_styled_message_not_a_crash(page):
@@ -330,7 +331,8 @@ def test_eligibility_badge_uses_icon_and_label_not_colour_alone(page):
     page.wait_for_selector(".badge", timeout=15000)
 
     badge = page.locator(".badge").first
-    assert "Eligible" in badge.inner_text()
+    # The stamp is uppercased by CSS, so compare case-insensitively.
+    assert "eligible" in badge.inner_text().lower()
     assert "✓" in badge.inner_text()
     assert "badge--eligible" in badge.get_attribute("class")
 
@@ -344,8 +346,9 @@ def test_requirement_rows_show_per_requirement_status(page):
 
     rows = page.locator(".reqs li")
     assert rows.count() == 2
-    assert "met" in rows.nth(0).inner_text()
-    assert "not stated" in rows.nth(1).inner_text()
+    # Status stamps are uppercased by CSS, so compare case-insensitively.
+    assert "met" in rows.nth(0).inner_text().lower()
+    assert "not stated" in rows.nth(1).inner_text().lower()
 
 
 def test_course_match_summary_and_bar(page):
@@ -368,6 +371,25 @@ def test_summary_reports_what_was_skipped(page):
     summary = page.inner_text("#results-summary")
     assert "9 pages checked" in summary
     assert "directory" in summary
+
+
+def test_results_are_their_own_page_and_edit_returns(page):
+    _fill_valid(page)
+    page.click("#submit-btn")
+    page.wait_for_selector(".result", timeout=15000)
+
+    # The form gave way to the shortlist page, which restates the profile.
+    assert not page.is_visible("#profile-form")
+    assert "Computer Science" in page.inner_text(".audit-strip")
+
+    # Editing returns to the form with everything still filled in.
+    page.click("#edit-profile")
+    assert page.is_visible("#profile-form")
+    assert page.input_value("#field_of_study") == "Computer Science"
+
+    # And the existing shortlist is one click away, without a re-search.
+    page.click("#back-to-results")
+    assert page.is_visible(".result")
 
 
 # --- card actions ----------------------------------------------------------

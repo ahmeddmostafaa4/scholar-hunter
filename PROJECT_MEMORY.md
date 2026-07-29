@@ -109,6 +109,12 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
   Their `.venv`s and `.env`s are git-ignored; the small `guc_cms`/`guc_portal`
   packages are committed with the repo.
 - **Eligibility scores criteria only.** `deadline` and `funding_scope` are deliberately excluded from the met/not-met breakdown (`ELIGIBILITY_FIELDS` vs `REQUIREMENT_FIELDS`): a deadline is not something a student "has", so scoring it produced meaningless `not_stated` rows that dragged every verdict to `unclear`. The deadline is judged separately as open/expired against today's date; funding scope is descriptive.
+- **A search-backend failure is reported too, never disguised as "no results".**
+  Tavily answers an exhausted quota with HTTP 432, and LangChain surfaces it as
+  either a raised HTTPError or an error string in the payload. Both were being
+  flattened to an empty result list, which told the student "nothing matched your
+  profile" when the real cause was billing. `_explain_search_error` now maps 432 /
+  401 / 429 to plain language, and `SearchUnavailable` covers the string form.
 - **A model outage is reported, never disguised as "no results".** When the Anthropic credit balance ran out mid-Phase-8, the pipeline degraded into an empty shortlist telling the student to *"try broadening your field or interests"* — blaming their search for an outage. `_ask_json` now marks `model_error`, the pipeline propagates it, and `_explain_model_error` turns the raw 400 into "Your Anthropic credit balance is too low… top it up at console.anthropic.com". The UI shows that in the error banner.
 - **Live tests skip, not fail, when the API is unreachable.** `tests/conftest.py` probes Claude once per session; anything marked `live_llm` skips with the reason (credit balance, rate limit, bad key). A red suite that actually means "top up your account" is a misleading signal. Offline-only run: `pytest -m "not live_llm"`.
 - **A card's "Save deadline" button is disabled when the page states no deadline**, with the reason in its tooltip — the backend already refused these, but only after the click.
@@ -138,15 +144,19 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
 ## Known issues / next steps
 
 - Playwright is a **dev-only** extra for the Phase 7 browser tests; those tests skip themselves when it is absent, and it is left commented out in `requirements.txt`.
-- **Amr's frontend redesign (PR #1) is open and unmerged.** The three features above
-  were built on the current design by choice, so merging that PR will conflict in
-  `index.html`, `style.css` and `script.js`, and the documents section, guidance
-  block and collapse toggle will need reapplying to his layout.
+- **Amr's frontend redesign (PR #1) is merged.** The three features were reapplied
+  to his layout in his idiom: documents as a cobalt-stamped checklist, "WATCH OUT"
+  as a mono stamp, the toggle as an uppercase mono label, funding on his dotted
+  ledger. Frontend tests were updated for CSS that uppercases labels — compare
+  stamp and toggle text case-insensitively.
 - The Interests placeholder still suggests "ML funding in Germany", which yields
   mostly directory pages. Naming a funder ("DAAD study scholarship Germany") is
   what actually works — the placeholder teaches the wrong input.
 - Google Calendar integration still a TODO (deadline store is local JSON).
 - Portal transcript fetch is slow (~1 req/min rate limit) — used only on demand.
 - **The Anthropic credit balance is currently exhausted** (ran out during Phase 8 testing). The 12 `live_llm` tests skip until it is topped up; they passed in Phases 1/3/4 before that. The app itself reports the condition clearly rather than failing oddly.
+- **The Tavily free-tier quota is currently exhausted** (HTTP 432). Live search
+  tests skip with that reason; the app reports it as "Your Tavily search quota is
+  used up" rather than "no opportunities found".
 - Tavily free tier caps requests; heavy testing can exhaust the quota. Live search tests are kept few for this reason.
 - `TavilySearchResults` logs a deprecation warning on the LangChain 0.3 line (successor is the `langchain-tavily` package). Kept because the spec names it; swapping is a one-line change in `_tavily()`.
