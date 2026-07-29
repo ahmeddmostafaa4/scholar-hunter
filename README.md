@@ -156,6 +156,26 @@ It tells you what is missing and what it could not merge (a `.docx`, a
 password-protected PDF), because finding a gap after submitting is the failure
 this exists to prevent.
 
+### Auto-filling a portal form
+
+**Auto-fill in a browser** opens the application portal in its own visible
+window, waits while you log in, then types what it can from your profile into
+the fields it recognises — name, email, nationality, field of study, GPA,
+university. Every field it touches is outlined in blue and listed back to you.
+
+**It stops at the submit button, and that is enforced in code rather than
+intended.** `autofill.py` has no `submit()` function and no code path to one; it
+never clicks a button, never presses Enter, and never touches a checkbox or radio
+— on an application form those are declarations, and only you may tick them.
+Passwords, payment fields and captchas are skipped, and anything you have already
+typed is left alone. A test drives a real form carrying a submit handler and
+asserts the handler never fires.
+
+You review the form and submit it yourself.
+
+Auto-fill needs Playwright (`pip install playwright && playwright install
+chromium`). Without it the button explains itself and everything else still works.
+
 **What it deliberately will not do.** It does not write your documents, and it
 does not submit for you. A motivation letter has to be your own words; a
 transcript or a reference letter is issued by someone else — generating either
@@ -194,6 +214,8 @@ deadlines.json      created at runtime
 | `POST` | `/search` | profile in, ranked uniform shortlist out |
 | `POST` | `/document_help` | explains how to prepare a card's required documents |
 | `POST` | `/application_pack` | merges the student's own files into one ordered PDF |
+| `POST` | `/autofill/open` | opens the portal in a visible browser |
+| `POST` | `/autofill/fill` | fills recognised fields from the profile — **never submits** |
 | `POST` | `/draft_email` | creates a Gmail **draft** |
 | `POST` | `/save_deadline` | appends to `deadlines.json` |
 

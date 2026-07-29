@@ -133,7 +133,30 @@
               </div>
 
               <!-- Courses: paste or upload -->
-              <fieldset class="field courses">
+              <fieldset class="field courses" style="margin-bottom:16px">
+            <legend>For application forms <span class="optional">(optional)</span></legend>
+            <p class="card__hint courses__hint">Only used to fill in a portal's form
+            fields for you. Never sent anywhere else, and never submitted.</p>
+            <div class="grid">
+              <div class="field">
+                <label for="full_name">Full name</label>
+                <input id="full_name" name="full_name" type="text"
+                       placeholder="e.g. Ahmed Mostafa" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="email">Email</label>
+                <input id="email" name="email" type="text"
+                       placeholder="e.g. you@example.com" autocomplete="off" />
+              </div>
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label for="university">Your university</label>
+              <input id="university" name="university" type="text"
+                     placeholder="e.g. German International University" autocomplete="off" />
+            </div>
+          </fieldset>
+
+          <fieldset class="field courses">
                 <legend>
                   Undergraduate courses <span class="optional">(optional)</span>
                 </legend>

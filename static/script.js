@@ -258,9 +258,18 @@
       }. Open the source above to find where to apply.</p>`;
     }
     return `
-      <a class="btn btn--solid" href="${escapeHtml(item.application_url)}"
-         target="_blank" rel="noopener noreferrer">Open application portal \u2197</a>
-      <p class="apply__url">${escapeHtml(item.application_url)}</p>`;
+      <div class="apply__row">
+        <a class="btn btn--solid" href="${escapeHtml(item.application_url)}"
+           target="_blank" rel="noopener noreferrer">Open application portal \u2197</a>
+        <button type="button" class="btn btn--outline" data-action="autofill">
+          <span class="btn__label">Auto-fill in a browser</span>
+        </button>
+      </div>
+      <p class="apply__url">${escapeHtml(item.application_url)}</p>
+      <p class="muted-note">Auto-fill opens the portal in its own window, types what
+      it can from your profile, and stops. It never ticks a declaration and never
+      submits — you check the form and submit it yourself.</p>
+      <div class="apply__result" data-autofill-result></div>`;
   }
 
   function renderGuidance(guidance) {
@@ -458,6 +467,11 @@
       packBtn.addEventListener("click", () => buildPack(card, item, inputs, packBtn));
     }
 
+    const autofillBtn = card.querySelector('[data-action="autofill"]');
+    if (autofillBtn) {
+      autofillBtn.addEventListener("click", () => runAutofill(card, item, autofillBtn));
+    }
+
     // Expand / collapse. Document guidance loads the first time it opens.
     const toggle = card.querySelector(".toggle");
     const details = card.querySelector(".result__details");
@@ -567,6 +581,85 @@
     } finally {
       button.disabled = false;
       button.innerHTML = `<span class="btn__label">${escapeHtml(original)}</span>`;
+    }
+  }
+
+  /* Open the portal in a real browser and fill what we can. Two deliberate
+     steps, because the student usually has to log in between them — and because
+     nothing should happen to an application form without them watching. */
+  async function runAutofill(card, item, button) {
+    const resultEl = card.querySelector("[data-autofill-result]");
+    const original = button.querySelector(".btn__label").textContent;
+    const busy = (label) => {
+      button.disabled = true;
+      button.innerHTML =
+        '<span class="btn__spinner" aria-hidden="true"></span>' +
+        `<span class="btn__label">${escapeHtml(label)}</span>`;
+    };
+    const restore = () => {
+      button.disabled = false;
+      button.innerHTML = `<span class="btn__label">${escapeHtml(original)}</span>`;
+    };
+
+    busy("Opening…");
+    resultEl.innerHTML = "";
+
+    try {
+      const opened = await fetch("/autofill/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: item.application_url }),
+      });
+      const openBody = await opened.json();
+      if (!opened.ok || !openBody.ok) {
+        resultEl.innerHTML = `<p class="pack__error">${escapeHtml(
+          openBody.error || "Could not open the portal."
+        )}</p>`;
+        return;
+      }
+
+      resultEl.innerHTML =
+        '<p class="muted-note">Portal open in a separate window. Log in and reach the ' +
+        'application form if you need to, then filling starts in a moment…</p>';
+      // Give the student a beat to land on the form before typing into it.
+      await new Promise((r) => setTimeout(r, 4000));
+
+      busy("Filling…");
+      const filled = await fetch("/autofill/fill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: lastProfile }),
+      });
+      const body = await filled.json();
+      if (!filled.ok || !body.ok) {
+        resultEl.innerHTML = `<p class="pack__error">${escapeHtml(
+          body.error || "Could not fill the form."
+        )}</p>`;
+        return;
+      }
+
+      const fields = body.filled || [];
+      if (!fields.length) {
+        resultEl.innerHTML =
+          '<p class="pack__warn">No fields matched your profile on this page. If you ' +
+          'were still logging in, reach the application form and press Auto-fill again.</p>';
+        return;
+      }
+
+      resultEl.innerHTML =
+        `<p class="pack__ok">&#10003; Filled ${fields.length} field${
+          fields.length === 1 ? "" : "s"
+        } &mdash; nothing submitted.</p>` +
+        `<ul class="autofill__list">${fields
+          .map((f) => `<li><span>${escapeHtml(f.field)}</span><em>${escapeHtml(f.value)}</em></li>`)
+          .join("")}</ul>` +
+        '<p class="muted-note">Check every field, complete the rest yourself, then ' +
+        'submit it in that window.</p>';
+    } catch (err) {
+      resultEl.innerHTML =
+        '<p class="pack__error">Could not reach the server to drive the browser.</p>';
+    } finally {
+      restore();
     }
   }
 
@@ -709,6 +802,10 @@
       gpa: form.elements.gpa.value.trim(),
       nationality: form.elements.nationality.value.trim(),
       interests: form.elements.interests.value.trim(),
+      // Identity fields, used only to fill a portal's form.
+      full_name: form.elements.full_name.value.trim(),
+      email: form.elements.email.value.trim(),
+      university: form.elements.university.value.trim(),
       courses: form.elements.courses.value
         .split("\n")
         .map((line) => line.trim())

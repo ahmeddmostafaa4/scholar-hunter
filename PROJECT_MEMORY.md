@@ -163,6 +163,29 @@ Everything runs locally from VS Code (`python app.py` → http://localhost:5000)
   module for model calls and outbound HTTP.
 - Upload cap raised 5 MB -> 40 MB: a pack is several scans at once.
 
+### Portal auto-fill (`autofill.py`)
+
+- Opens the application portal in a **headed** browser the student watches, waits
+  for them to log in, then fills fields matched from the profile by label, name,
+  id, placeholder and aria-label. Filled fields are outlined and reported back.
+- **Never submits, enforced structurally**: no `submit()` exists on the module and
+  there is no path to one; no `.click()`, no `press()`, no `keyboard`. Only
+  text-like inputs, textareas and selects are written. Checkboxes and radios are
+  never touched at all — on an application form those are declarations, and a
+  test found the declaration box was previously only safe by luck (nothing
+  matched it) rather than by rule.
+- Passwords, payment fields, captchas and already-filled fields are skipped.
+- Playwright runs the browser in a dedicated worker thread behind a command queue,
+  because Playwright objects are thread-bound and Flask serves each request on a
+  different thread.
+- Optional: without Playwright the button explains itself and the rest still works.
+- The profile gained optional `full_name` / `email` / `university`, used only for
+  filling portal forms.
+- **Asked for, and declined again: fully automatic submission.** Applications are
+  one-shot, carry a truthfulness declaration only the applicant can make, and a
+  wrong field surfaces months later as a rejection with no resubmit. Auto-fill up
+  to the submit button was built instead.
+
 ## Known issues / next steps
 
 - Playwright is a **dev-only** extra for the Phase 7 browser tests; those tests skip themselves when it is absent, and it is left commented out in `requirements.txt`.

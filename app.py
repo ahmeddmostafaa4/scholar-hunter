@@ -22,6 +22,7 @@ from flask_cors import CORS
 
 import agent
 import application_pack as pack_builder
+import autofill
 
 app = Flask(__name__)
 CORS(app)  # so the page can call the API from localhost without friction
@@ -101,6 +102,10 @@ def read_profile(req) -> tuple[dict, str]:
                 "gpa",
                 "nationality",
                 "interests",
+                # Optional, and only used to fill a portal's form fields.
+                "full_name",
+                "email",
+                "university",
             )
         }
         courses = [
@@ -274,6 +279,37 @@ def application_pack():
         "X-Pack-Pages, X-Pack-Included, X-Pack-Skipped, X-Pack-Missing"
     )
     return response
+
+
+@app.post("/autofill/open")
+def autofill_open():
+    """Open the application portal in a visible browser the student controls."""
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or (body.get("opportunity") or {}).get("application_url") or "").strip()
+    if not url or url.lower() == agent.NOT_STATED:
+        return fail("This opportunity has no application link to open.")
+
+    outcome = autofill.open_portal(url)
+    if not outcome["ok"]:
+        status = 503 if outcome.get("available") is False else 502
+        return fail(outcome["error"], status, configured=outcome.get("available", True))
+    return jsonify(outcome)
+
+
+@app.post("/autofill/fill")
+def autofill_fill():
+    """Fill the open form from the profile. Never submits — see autofill.py."""
+    body = request.get_json(silent=True) or {}
+    outcome = autofill.fill_form(body.get("profile") or {})
+    if not outcome["ok"]:
+        status = 503 if outcome.get("available") is False else 502
+        return fail(outcome["error"], status, configured=outcome.get("available", True))
+    return jsonify(outcome)
+
+
+@app.post("/autofill/close")
+def autofill_close():
+    return jsonify(autofill.close_portal())
 
 
 @app.post("/draft_email")
