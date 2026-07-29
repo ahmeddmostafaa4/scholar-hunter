@@ -348,6 +348,7 @@ REQUIREMENT_FIELDS = [
     "deadline",
     "funding_scope",
     "required_courses",
+    "required_documents",
 ]
 
 # Only these are *criteria the student is judged against*. `deadline` is checked
@@ -494,8 +495,8 @@ def extract_requirements_from(source: str, page_text: str = "") -> dict:
 
 Return ONLY a JSON object with exactly these keys:
   minimum_gpa, degree_level, eligible_nationalities, language_requirement,
-  field_of_study, deadline, funding_scope, required_courses, opportunity_name,
-  opportunity_type, institution, is_single_opportunity
+  field_of_study, deadline, funding_scope, required_courses, required_documents,
+  opportunity_name, opportunity_type, institution, is_single_opportunity
 
 FIRST decide "is_single_opportunity" (true/false):
 - true  = this page describes ONE specific named opportunity a student can apply to.
@@ -512,6 +513,12 @@ Rules — these matter more than completeness:
 - If the text does not state a field, set it to exactly "{NOT_STATED}".
 - "required_courses" is a LIST of prerequisite/required course names the applicant
   must already have studied. Use [] if the text names none.
+- "required_documents" is a LIST of documents the applicant must SUBMIT with the
+  application (e.g. "Motivation letter (max 2 pages)", "CV in Europass format",
+  "Two academic letters of recommendation", "Certified transcript of records",
+  "IELTS or TOEFL certificate", "Copy of passport"). Keep any stated length,
+  format or certification detail as part of the entry — that detail is what an
+  applicant actually needs. Use [] if the text names none.
 - "opportunity_type" must be one of: "scholarship", "master's programme",
   "workshop", "grant", or "{NOT_STATED}".
 - "deadline" should be the application deadline as written (e.g. "15 January 2026").
@@ -525,10 +532,13 @@ TEXT:
     parsed = _ask_json(prompt, fallback={"requirements": blank})
 
     requirements = {f: parsed.get(f, NOT_STATED) or NOT_STATED for f in REQUIREMENT_FIELDS}
-    if isinstance(requirements["required_courses"], str):
-        # Normalise a stringified list into a real list.
-        value = requirements["required_courses"]
-        requirements["required_courses"] = [] if value == NOT_STATED else [value]
+    # Normalise the list-valued fields: the model sometimes returns a bare string.
+    for list_field in ("required_courses", "required_documents"):
+        value = requirements[list_field]
+        if isinstance(value, str):
+            requirements[list_field] = [] if value == NOT_STATED else [value]
+        elif not isinstance(value, list):
+            requirements[list_field] = []
 
     return {
         "ok": True,
@@ -904,7 +914,118 @@ def match_courses(student_courses: str, required_courses: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tool 5: Gmail draft (draft only — never sends)
+# Tool 5: how to prepare the required documents
+# ---------------------------------------------------------------------------
+
+
+def document_guidance(
+    documents, opportunity_name: str = "", institution: str = "", student_profile=None
+) -> dict:
+    """Explain how to prepare each document this opportunity asks for.
+
+    Generated on demand — the frontend only calls this when a card is expanded,
+    so a shortlist the student skims past costs nothing extra.
+
+    The advice is tied to this opportunity and this student (their field, level
+    and courses), because "write a good motivation letter" helps nobody.
+    """
+    docs = _as_list(documents)
+    if not docs:
+        return {
+            "ok": True,
+            "assessed": False,
+            "guidance": [],
+            "note": "This page does not list the documents required.",
+        }
+
+    profile = _as_dict(student_profile, "profile") if student_profile else {}
+
+    prompt = f"""A student is preparing an application. Explain how to prepare each required document.
+
+OPPORTUNITY: {opportunity_name or "(not named)"}{" — " + institution if institution and institution != NOT_STATED else ""}
+
+DOCUMENTS THE APPLICATION REQUIRES:
+{json.dumps(docs, indent=2, ensure_ascii=False)}
+
+THE STUDENT:
+{json.dumps(profile, indent=2, ensure_ascii=False) if profile else "(no profile given)"}
+
+Return ONLY a JSON object:
+{{
+  "guidance": [
+    {{"document": "<the document, copied from the list above>",
+      "summary": "<one sentence on what this document must achieve here>",
+      "steps": ["<concrete, specific action>", "..."],
+      "watch_out": "<the mistake that most often costs applicants this document, or ''>"}}
+  ]
+}}
+
+Rules:
+- One entry per required document, in the same order.
+- Be SPECIFIC to this opportunity and this student. Reference their actual field,
+  degree level, GPA and courses where relevant. "Write clearly" is useless advice;
+  "name a research group at this institute that works on your ML coursework" is not.
+- Respect any stated limit (page count, word count, format, certification) and
+  repeat it in the steps so the student does not have to look it up again.
+- 2 to 4 steps per document. Each step an action the student can take today.
+- Do NOT invent requirements the opportunity did not state. If a detail (like a
+  word limit) is not given, do not make one up — say it is not specified.
+"""
+    parsed = _ask_json(prompt, fallback={"guidance": []})
+
+    guidance = []
+    for row in parsed.get("guidance", []):
+        if not isinstance(row, dict):
+            continue
+        steps = [str(s).strip() for s in (row.get("steps") or []) if str(s).strip()]
+        guidance.append(
+            {
+                "document": str(row.get("document", "")).strip(),
+                "summary": str(row.get("summary", "")).strip(),
+                "steps": steps[:5],
+                "watch_out": str(row.get("watch_out", "")).strip(),
+            }
+        )
+
+    return {
+        "ok": not parsed.get("model_error", False),
+        "assessed": bool(guidance),
+        "guidance": guidance,
+        "note": parsed.get("error", ""),
+    }
+
+
+class DocumentHelpInput(BaseModel):
+    documents: str = Field(
+        description="The documents the application requires — a JSON array string, "
+        "or one per line."
+    )
+    opportunity_name: str = Field(default="", description="Name of the opportunity.")
+    institution: str = Field(default="", description="The awarding institution.")
+    student_profile: str = Field(
+        default="", description="The student's profile as a JSON object string."
+    )
+
+
+@tool("explain_documents", args_schema=DocumentHelpInput)
+def explain_documents(
+    documents: str,
+    opportunity_name: str = "",
+    institution: str = "",
+    student_profile: str = "",
+) -> str:
+    """Explain how to prepare each document an application requires.
+
+    Gives per-document steps tailored to this opportunity and this student —
+    what the document must achieve, concrete actions, and the mistake that most
+    often costs applicants. Never invents a requirement the page did not state.
+    """
+    outcome = document_guidance(documents, opportunity_name, institution, student_profile)
+    return json.dumps(outcome, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 6: Gmail draft (draft only — never sends)
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -1199,6 +1320,7 @@ def build_tools(include_actions: bool = True) -> list:
         extract_requirements,
         check_eligibility,
         match_courses,
+        explain_documents,
     ]
     if include_actions:
         tools.extend(ACTION_TOOLS)
@@ -1450,7 +1572,10 @@ def _assess_one(result: dict, profile: dict, courses: list) -> dict | None:
             "confidence_capped": course_match.get("confidence_capped", False),
             "matches": course_match.get("matches", []),
         },
-        # 5. Deadline & funding
+        # 5. Documents the application requires (guidance is fetched on demand,
+        #    when the student expands the card)
+        "documents": _as_list(requirements.get("required_documents", [])),
+        # 6. Deadline & funding
         "deadline": str(requirements.get("deadline", NOT_STATED)),
         "deadline_status": eligibility.get("deadline_status", NOT_STATED),
         "funding": str(requirements.get("funding_scope", NOT_STATED)),

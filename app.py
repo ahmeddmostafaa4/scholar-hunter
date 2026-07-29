@@ -171,6 +171,45 @@ def search():
     return jsonify(outcome)
 
 
+@app.post("/document_help")
+def document_help():
+    """Explain how to prepare a chosen opportunity's required documents.
+
+    Called when a card is expanded rather than during /search, so a shortlist the
+    student only skims costs nothing extra.
+    """
+    body = request.get_json(silent=True) or {}
+    opportunity = body.get("opportunity") or {}
+
+    documents = body.get("documents") or opportunity.get("documents") or []
+    if not documents:
+        return jsonify(
+            {
+                "ok": True,
+                "assessed": False,
+                "guidance": [],
+                "note": "This page does not list the documents required.",
+            }
+        )
+
+    try:
+        outcome = agent.document_guidance(
+            documents,
+            opportunity_name=opportunity.get("name", ""),
+            institution=opportunity.get("institution", ""),
+            student_profile=body.get("profile") or {},
+        )
+    except agent.MissingKeyError as exc:
+        return fail(str(exc), 503)
+    except Exception as exc:
+        app.logger.exception("document help failed")
+        return fail(f"Could not prepare document guidance: {exc}", 500)
+
+    if not outcome.get("ok"):
+        return fail(outcome.get("note") or "Could not prepare document guidance.", 502)
+    return jsonify(outcome)
+
+
 @app.post("/draft_email")
 def draft_email():
     """Create a Gmail DRAFT for a chosen opportunity. Never sends."""

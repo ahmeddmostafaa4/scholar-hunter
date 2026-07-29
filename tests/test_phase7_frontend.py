@@ -57,7 +57,18 @@ def _free_port():
 
 @pytest.fixture(scope="module")
 def server():
-    """A real Flask server with the agent stubbed out."""
+    """A real Flask server with the agent stubbed out.
+
+    The originals are restored on teardown. Assigning to `agent.*` without
+    restoring leaks the stubs into every test that runs afterwards, which
+    produced failures that only appeared in a full-suite run and vanished when
+    the offending file was run on its own.
+    """
+    originals = {
+        name: getattr(agent, name)
+        for name in ("run_shortlist", "save_deadline_entry", "gmail_available")
+    }
+
     agent.run_shortlist = lambda profile, **kw: {
         "ok": True, "results": [CARD], "considered": 9,
         "skipped_listings": 3, "skipped_ineligible": 5,
@@ -75,7 +86,11 @@ def server():
     )
     thread.start()
     time.sleep(1.5)
-    yield f"http://127.0.0.1:{port}"
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        for name, original in originals.items():
+            setattr(agent, name, original)
 
 
 @pytest.fixture(scope="module")
